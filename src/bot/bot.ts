@@ -2,7 +2,7 @@ import { Telegraf, Context } from "telegraf";
 import { message } from "telegraf/filters";
 import { MexcFuturesSDK } from "../client";
 import { Logger } from "../utils/logger";
-import { BotConfig } from "./types";
+import { BotConfig, TradeSignal } from "./types";
 import { parseSignal, normalizeSymbol } from "./parser";
 import { ContractResolver } from "./resolver";
 import { calculatePositionSize } from "./sizer";
@@ -109,7 +109,8 @@ export class SignalBot {
     const text = msg.text;
 
     // Check if from allowed channel
-    if (!this.isAllowedChannel(chatId, msg.chat)) {
+    const chatUsername = "username" in msg.chat ? (msg.chat as { username?: string }).username : undefined;
+    if (!this.isAllowedChannel(chatId, chatUsername)) {
       return; // silently ignore
     }
 
@@ -144,7 +145,7 @@ export class SignalBot {
   /**
    * Full pipeline: normalize → resolve → size → execute.
    */
-  private async processSignal(signal: ReturnType<typeof parseSignal> & {}): Promise<void> {
+  private async processSignal(signal: TradeSignal): Promise<void> {
     // 1. Normalize symbol
     const mexcSymbol = normalizeSymbol(signal.rawSymbol);
     if (!mexcSymbol) {
@@ -229,14 +230,13 @@ export class SignalBot {
   /**
    * Check if a chat is in the allowed channels list.
    */
-  private isAllowedChannel(chatId: string, chat: any): boolean {
+  private isAllowedChannel(chatId: string, username?: string): boolean {
     // Check by numeric ID
     if (this.config.allowedChannels.includes(chatId)) {
       return true;
     }
 
     // Check by username (e.g. "@channelname")
-    const username = chat?.username;
     if (
       username &&
       this.config.allowedChannels.some(

@@ -103,7 +103,7 @@ export class TradeExecutor {
     takeProfitPrice: number
   ): Promise<TradeRecord> {
     // Generate a unique external order ID for idempotency
-    const externalOid = `tg_${trade.signal.chatId || "unknown"}_${trade.signal.messageId || Date.now()}_${takeProfitPrice}`;
+    const externalOid = `tg_${trade.signal.chatId || "unknown"}_${trade.signal.messageId || Date.now()}_tp${takeProfitPrice}_v${volume}`;
 
     const orderParams: SubmitOrderRequest = {
       symbol: trade.mexcSymbol,

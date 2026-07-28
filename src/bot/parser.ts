@@ -14,7 +14,7 @@ import { TradeSignal } from "./types";
  *   5: rest of line for TP extraction
  */
 const SIGNAL_REGEX =
-  /\b(BUY|SELL)\s+([A-Z0-9]{3,20})@(\d+(?:\.\d+)?)\s+SL\s+(\d+(?:\.\d+)?)(.*)/i;
+  /\b(BUY|SELL)\s+([A-Z][A-Z0-9]{2,19})@(\d+(?:\.\d+)?)\s+SL\s+(\d+(?:\.\d+)?)(.*)/i;
 
 /**
  * Extract one or more TP values from the remainder of the signal line.
