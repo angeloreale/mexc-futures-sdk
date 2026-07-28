@@ -111,6 +111,9 @@ Thumbs.db
 *.bak
 *.backup
 
+# Bot state file
+bot-state.json
+
 # Personal notes and documentation
 notes.md
 TODO.md

@@ -369,6 +369,86 @@ ts-node examples/websocket.ts
 - `subscribeToTicker(symbol)` - Market data subscriptions
 - `disconnect()` - Close connection
 
+## 🤖 Telegram Signal Bot
+
+The SDK includes a built-in Telegram signal bot that listens for trading signals on configured channels and automatically executes trades on MEXC Futures.
+
+### Signal Formats
+
+The bot recognizes these signal formats:
+
+```
+BUY TAOUSDT@187.54 SL 185.13 TP 188.81
+SELL BTCUSDT@65000 SL 66000 TP 63000
+BUY ETHUSDT@3500 SL 3400 TP1 3600 TP2 3700 TP3 3800
+BUY SOLUSDT@150 SL 145
+```
+
+- **BUY** = open long, **SELL** = open short
+- **SL** = stop-loss price (mandatory)
+- **TP** = take-profit (optional — defaults to 1.5× risk distance)
+- Multiple TPs (TP1, TP2, TP3) split volume equally across targets
+- Symbols are normalized: `TAOUSDT` → `TAO_USDT`
+
+### Quick Start
+
+1. Copy `.env.example` to `.env` and fill in your credentials
+2. Start in dry-run mode first:
+
+```bash
+# Development
+npm run bot
+
+# Production
+npm run build
+npm run bot:start
+```
+
+### Configuration
+
+All settings come from environment variables (see `.env.example`):
+
+| Variable | Default | Description |
+|---|---|---|
+| `MEXC_AUTH_TOKEN` | — | WEB auth token from browser |
+| `TELEGRAM_BOT_TOKEN` | — | Bot API token from @BotFather |
+| `ALLOWED_CHANNELS` | — | Comma-separated channel/chat IDs |
+| `DEFAULT_LEVERAGE` | `10` | Default leverage (1–200) |
+| `OPEN_TYPE` | `1` | 1 = isolated, 2 = cross |
+| `RISK_PERCENT` | `0.01` | Risk per trade (0.01 = 1% of equity) |
+| `DEFAULT_TP_RATIO` | `1.5` | TP:SL ratio when no TP given |
+| `MAX_CONCURRENT_TRADES` | `5` | Max open positions |
+| `MAX_NOTIONAL_PER_TRADE` | `10000` | Max notional per trade (USDT) |
+| `DRY_RUN` | `true` | Parse/size but don't submit orders |
+| `TRADING_ENABLED` | `true` | Master trading switch |
+
+### Linux Deployment
+
+A systemd service file is provided in `deploy/mexc-signal-bot.service`:
+
+```bash
+# Create service user
+sudo useradd -r -s /bin/false mexcbot
+
+# Deploy
+sudo cp -r . /opt/mexc-signal-bot
+sudo cp deploy/mexc-signal-bot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now mexc-signal-bot
+
+# View logs
+sudo journalctl -u mexc-signal-bot -f
+```
+
+### Safety Features
+
+- **Dry-run mode** — verify parsing and sizing without submitting orders
+- **Idempotency** — duplicate signals are never executed twice
+- **Position limits** — configurable max concurrent trades
+- **Notional cap** — max USDT value per trade
+- **Symbol validation** — only trades on active, API-allowed MEXC contracts
+- **Risk-based sizing** — automatically calculates volume from equity and stop distance
+
 ## Support
 
 This is an unofficial SDK. Use at your own risk. For issues and feature requests, please open a GitHub issue.
