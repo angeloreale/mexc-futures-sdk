@@ -85,6 +85,7 @@ function makeSignal(overrides?: Partial<TradeSignal>): TradeSignal {
     entry: 187.54,
     sl: 185.13,
     tp: [188.81],
+    orderType: "trigger",
     ...overrides,
   };
 }

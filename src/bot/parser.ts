@@ -111,6 +111,7 @@ export function parseSignal(
     entry,
     sl,
     tp: tpValues, // may be empty — caller should apply default TP ratio
+    orderType: isMarketEntry ? "market" : "trigger",
     messageId,
     chatId,
     timestamp,

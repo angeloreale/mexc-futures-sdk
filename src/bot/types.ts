@@ -14,6 +14,8 @@ export interface TradeSignal {
   sl: number;
   /** Take-profit price(s); at least one is always present after normalization */
   tp: number[];
+  /** Order type: "market" when no @/EP given, "trigger" when explicit entry provided */
+  orderType: "market" | "trigger";
   /** Telegram message ID for idempotency */
   messageId?: number;
   /** Telegram channel/chat ID */

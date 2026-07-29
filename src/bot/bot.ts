@@ -149,7 +149,7 @@ export class SignalBot {
     }
 
     this.logger.info(
-      `📊 Signal detected: ${signal.action} ${signal.rawSymbol}@${signal.entry} SL ${signal.sl} TP ${signal.tp.join(",") || "(default)"}`
+      `📊 Signal detected: ${signal.action} ${signal.rawSymbol}${signal.orderType === "trigger" ? `@${signal.entry}` : ""} SL ${signal.sl} TP ${signal.tp.join(",") || "(default)"} (${signal.orderType === "trigger" ? "🔔 trigger order" : "💹 market order"})`
     );
 
     // Persist parsed signal to file log
@@ -208,8 +208,9 @@ export class SignalBot {
       `✅ Contract found: ${contract.symbol} (size=${contract.contractSize}, minVol=${contract.minVol})`
     );
 
-    // 2.5. If signal has no entry price (market order), resolve it via ticker
-    if (signal.entry === 0) {
+    // 2.5. If market entry (no @/EP), resolve price via ticker
+    //      For trigger orders, the entry IS the trigger price — no resolution needed
+    if (signal.orderType === "market") {
       try {
         const ticker = await this.mexcClient.getTicker(mexcSymbol);
         const marketPrice = ticker?.data?.lastPrice;
@@ -223,6 +224,8 @@ export class SignalBot {
         this.logger.error(`❌ Failed to fetch ticker for ${mexcSymbol}:`, error);
         return;
       }
+    } else {
+      this.logger.info(`🔔 Using explicit entry as trigger price: ${mexcSymbol} @ ${signal.entry}`);
     }
 
     // 3. Get account equity (cached for 10s to avoid rate limits)
