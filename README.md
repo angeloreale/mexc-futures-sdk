@@ -63,8 +63,8 @@ The SDK supports **two** authentication methods. API keys are preferred for bot 
 Set these in your `.env`:
 
 ```bash
-MEXC_KEY=mx0vglS6XtxqHJsEse        # Your MEXC API key
-MEXC_SECRET_KEY=60cbe8535ba64...    # Your MEXC API secret
+MEXC_KEY=mx0your_api_key_here        # Your MEXC API key
+MEXC_SECRET_KEY=your_secret_here      # Your MEXC API secret
 ```
 
 The bot uses HMAC-SHA256 signing with these credentials.
