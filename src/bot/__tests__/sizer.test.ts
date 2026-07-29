@@ -3,7 +3,7 @@ import { BotConfig, TradeSignal } from "../types";
 import { ContractDetail } from "../../types/market";
 import { Logger } from "../../utils/logger";
 
-const logger = new Logger("SILENT");
+const logger = new Logger({ level: "SILENT" });
 
 const defaultConfig: BotConfig = {
   mexcApiKey: "",
@@ -22,6 +22,8 @@ const defaultConfig: BotConfig = {
   logLevel: "SILENT",
   baseCurrency: "USDT",
   stateFilePath: "/tmp/test-state.json",
+  logDir: "/tmp/test-logs",
+  logRetentionDays: 90,
 };
 
 function makeContract(overrides?: Partial<ContractDetail>): ContractDetail {

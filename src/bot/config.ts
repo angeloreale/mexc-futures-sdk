@@ -52,6 +52,8 @@ export function loadConfig(): BotConfig {
 
   const baseCurrency = env.BASE_CURRENCY || "USDT";
   const stateFilePath = env.STATE_FILE_PATH || "./bot-state.json";
+  const logDir = env.LOG_DIR || "./logs";
+  const logRetentionDays = parseInt(env.LOG_RETENTION_DAYS || "90", 10);
 
   const config: BotConfig = {
     mexcApiKey,
@@ -70,6 +72,8 @@ export function loadConfig(): BotConfig {
     logLevel,
     baseCurrency,
     stateFilePath,
+    logDir,
+    logRetentionDays,
   };
 
   validate(config);
@@ -108,6 +112,11 @@ function validate(config: BotConfig): void {
   if (config.maxNotionalPerTrade <= 0) {
     throw new Error(
       `MAX_NOTIONAL_PER_TRADE must be > 0, got ${config.maxNotionalPerTrade}`
+    );
+  }
+  if (config.logRetentionDays < 1) {
+    throw new Error(
+      `LOG_RETENTION_DAYS must be >= 1, got ${config.logRetentionDays}`
     );
   }
 }

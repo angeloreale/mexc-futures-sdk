@@ -1,5 +1,5 @@
 import { Telegraf, Context } from "telegraf";
-import { message } from "telegraf/filters";
+import { message, channelPost } from "telegraf/filters";
 import { MexcFuturesSDK } from "../client";
 import { Logger } from "../utils/logger";
 import { BotConfig, TradeSignal } from "./types";
@@ -25,7 +25,11 @@ export class SignalBot {
 
   constructor(config: BotConfig) {
     this.config = config;
-    this.logger = new Logger(config.logLevel);
+    this.logger = new Logger({
+      level: config.logLevel,
+      logDir: config.logDir,
+      retentionDays: config.logRetentionDays,
+    });
 
     // Initialize MEXC client (prefers API key auth over browser token)
     this.mexcClient = new MexcFuturesSDK({
@@ -82,13 +86,15 @@ export class SignalBot {
       this.logger.warn("⚠️ MEXC connection test failed");
     }
 
-    // Register message handler
-    this.telegram.on(message("text"), (ctx) => this.handleMessage(ctx));
+    // Register handlers for both group/DM messages and channel posts
+    this.telegram.on(message("text"), (ctx) => this.handleTelegramMessage(ctx, "message"));
+    this.telegram.on(channelPost("text"), (ctx) => this.handleTelegramMessage(ctx, "channel_post"));
 
     // Graceful shutdown
     const shutdown = async (signal: string) => {
       this.logger.info(`\n🛑 Received ${signal} — shutting down...`);
       this.telegram.stop(signal);
+      await this.logger.close();
       process.exit(0);
     };
     process.once("SIGINT", () => shutdown("SIGINT"));
@@ -100,24 +106,30 @@ export class SignalBot {
   }
 
   /**
-   * Handle an incoming text message from Telegram.
+   * Handle an incoming text message from Telegram (group/DM or channel post).
    */
-  private async handleMessage(ctx: Context & { message: { text: string } }): Promise<void> {
-    const msg = ctx.message;
-    if (!msg || !("text" in msg)) return;
+  private async handleTelegramMessage(
+    ctx: Context,
+    source: "message" | "channel_post"
+  ): Promise<void> {
+    // Extract message data from the correct context property
+    const msg: any = source === "channel_post"
+      ? (ctx as any).channelPost
+      : (ctx as any).message;
+    if (!msg || !msg.text) return;
 
     const chatId = String(msg.chat.id);
     const messageId = msg.message_id;
-    const text = msg.text;
+    const text: string = msg.text;
 
     // Check if from allowed channel
-    const chatUsername = "username" in msg.chat ? (msg.chat as { username?: string }).username : undefined;
+    const chatUsername = msg.chat?.username;
     if (!this.isAllowedChannel(chatId, chatUsername)) {
       return; // silently ignore
     }
 
-    this.logger.debug(
-      `📨 Message from ${chatId}#${messageId}: ${text.substring(0, 80)}...`
+    this.logger.info(
+      `📨 ${source === "channel_post" ? "Channel" : "Message"} from ${chatId}#${messageId}: ${text.substring(0, 80)}`
     );
 
     // Idempotency check
@@ -136,6 +148,9 @@ export class SignalBot {
     this.logger.info(
       `📊 Signal detected: ${signal.action} ${signal.rawSymbol}@${signal.entry} SL ${signal.sl} TP ${signal.tp.join(",") || "(default)"}`
     );
+
+    // Persist parsed signal to file log
+    this.logger.logSignal(signal);
 
     // Mark as processed now to prevent duplicate processing on restart
     this.state.markProcessed(chatId, messageId);

@@ -102,4 +102,10 @@ export interface BotConfig {
 
   /** State file path for idempotency */
   stateFilePath: string;
+
+  /** Directory for persistent log files (signals, trades, bot). */
+  logDir: string;
+
+  /** Days to retain log files (default 90). */
+  logRetentionDays: number;
 }

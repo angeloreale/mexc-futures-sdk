@@ -46,6 +46,7 @@ export class TradeExecutor {
         success: true,
         executedAt: Date.now(),
       });
+      this.logTradeRecord(records[records.length - 1]);
       return records;
     }
 
@@ -58,6 +59,7 @@ export class TradeExecutor {
         error: "Trading disabled",
         executedAt: Date.now(),
       });
+      this.logTradeRecord(records[records.length - 1]);
       return records;
     }
 
@@ -65,6 +67,7 @@ export class TradeExecutor {
     if (trade.allTpTargets.length <= 1) {
       const record = await this.submitSingleOrder(trade, trade.volume, trade.takeProfitPrice);
       records.push(record);
+      this.logTradeRecord(record);
       return records;
     }
 
@@ -84,6 +87,7 @@ export class TradeExecutor {
       const tp = trade.allTpTargets[i];
       const record = await this.submitSingleOrder(trade, vol, tp);
       records.push(record);
+      this.logTradeRecord(record);
 
       // If the first order fails, don't continue
       if (!record.success) {
@@ -158,5 +162,29 @@ export class TradeExecutor {
         executedAt: Date.now(),
       };
     }
+  }
+
+  /** Persist a trade record to the trades log file. */
+  private logTradeRecord(record: TradeRecord): void {
+    const t = record.resolved;
+    this.logger.logTrade({
+      orderId: record.orderId,
+      success: record.success,
+      error: record.error,
+      symbol: t.mexcSymbol,
+      side: t.side === 1 ? "LONG" : "SHORT",
+      volume: t.volume,
+      entry: t.signal.entry,
+      sl: t.stopLossPrice,
+      tp: t.takeProfitPrice,
+      leverage: t.leverage,
+      openType: t.openType === 1 ? "ISOLATED" : "CROSS",
+      equity: t.equity,
+      riskAmount: t.riskAmount,
+      dryRun: this.config.dryRun,
+      signalChatId: t.signal.chatId,
+      signalMessageId: t.signal.messageId,
+      signalRaw: t.signal.raw,
+    });
   }
 }
