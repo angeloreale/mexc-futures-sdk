@@ -163,7 +163,7 @@ export class SignalBot {
   }
 
   /**
-   * Fetch account equity with a 10-second cache to avoid MEXC rate limits (code 513).
+   * Fetch account equity with a 10-second cache and retry on rate limits.
    */
   private async fetchEquity(): Promise<number> {
     const now = Date.now();
@@ -172,16 +172,67 @@ export class SignalBot {
       return this.equityCache.equity;
     }
 
-    const asset = await this.mexcClient.getAccountAsset(this.config.baseCurrency);
-    this.logger.info("📦 Raw asset response:", JSON.stringify(asset));
-
-    // Extract equity: try standard { success, code, data: {...} } wrapper first,
-    // then fall back to the response object itself.
-    const inner = asset.data ?? asset;
-    const equity: number = (inner as any).equity ?? 0;
-
+    const equity = await this.fetchEquityWithRetry(3);
     this.equityCache = { equity, ts: now };
     return equity;
+  }
+
+  /**
+   * Fetch equity from MEXC with retry on 513 rate-limit errors.
+   */
+  private async fetchEquityWithRetry(maxRetries: number): Promise<number> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const asset = await this.mexcClient.getAccountAsset(
+          this.config.baseCurrency
+        );
+
+        // Check for API-level error
+        if (!asset.success) {
+          if (asset.code === 513 && attempt < maxRetries) {
+            const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+            this.logger.warn(
+              `⏳ Rate limited (513) fetching equity — retry ${attempt}/${maxRetries} in ${delay}ms`
+            );
+            await new Promise((r) => setTimeout(r, delay));
+            continue;
+          }
+          throw new Error(`MEXC API error: code ${asset.code}`);
+        }
+
+        const inner = asset.data ?? asset;
+        const equity: number = (inner as any).equity ?? 0;
+
+        if (equity <= 0) {
+          throw new Error(
+            `Equity returned as ${equity} ${this.config.baseCurrency}`
+          );
+        }
+
+        return equity;
+      } catch (error) {
+        // If it's an HTTP/network error and we can retry
+        if (attempt < maxRetries) {
+          const isRateLimit =
+            error instanceof Error &&
+            (error.message.includes("513") ||
+             error.message.includes("rate limit") ||
+             error.message.includes("Invalid request"));
+
+          if (isRateLimit) {
+            const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+            this.logger.warn(
+              `⏳ Rate limited fetching equity — retry ${attempt}/${maxRetries} in ${delay}ms`
+            );
+            await new Promise((r) => setTimeout(r, delay));
+            continue;
+          }
+        }
+        throw error; // rethrow if out of retries or not a rate-limit error
+      }
+    }
+
+    throw new Error("Failed to fetch equity after retries");
   }
 
   /**

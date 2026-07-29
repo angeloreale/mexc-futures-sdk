@@ -50,24 +50,36 @@ describe("parseSignal", () => {
     expect(result!.action).toBe("BUY");
   });
 
-  it("rejects invalid SL direction for BUY (SL above entry)", () => {
+  it("warns on invalid SL direction for BUY (SL above entry) but still accepts", () => {
     const result = parseSignal("BUY BTCUSDT@65000 SL 66000 TP 67000");
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result!.action).toBe("BUY");
+    expect(result!.entry).toBe(65000);
+    expect(result!.sl).toBe(66000);
   });
 
-  it("rejects invalid SL direction for SELL (SL below entry)", () => {
+  it("warns on invalid SL direction for SELL (SL below entry) but still accepts", () => {
     const result = parseSignal("SELL BTCUSDT@65000 SL 64000 TP 63000");
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result!.action).toBe("SELL");
+    expect(result!.entry).toBe(65000);
+    expect(result!.sl).toBe(64000);
   });
 
-  it("rejects invalid TP direction for BUY (TP below entry)", () => {
+  it("warns on invalid TP direction for BUY (TP below entry) but still accepts", () => {
     const result = parseSignal("BUY BTCUSDT@65000 SL 64000 TP 63000");
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result!.action).toBe("BUY");
+    expect(result!.entry).toBe(65000);
+    expect(result!.tp).toEqual([63000]);
   });
 
-  it("rejects invalid TP direction for SELL (TP above entry)", () => {
+  it("warns on invalid TP direction for SELL (TP above entry) but still accepts", () => {
     const result = parseSignal("SELL BTCUSDT@65000 SL 66000 TP 67000");
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result!.action).toBe("SELL");
+    expect(result!.entry).toBe(65000);
+    expect(result!.tp).toEqual([67000]);
   });
 
   it("returns null for non-signal text", () => {
@@ -161,6 +173,32 @@ describe("parseSignal", () => {
     expect(result!.entry).toBe(460);
     expect(result!.sl).toBe(459.41);
     expect(result!.tp).toEqual([467.72]);
+  });
+
+  // --- Trigger order: TPs below entry for BUY should be accepted ---
+  // The entry is a trigger price, not a guaranteed fill. User explicitly chose targets.
+  it("accepts trigger BUY with TPs below entry price", () => {
+    const result = parseSignal(
+      "BUY ZECUSDT@469 SL 459.41 TP1 467.72 TP2 468.80 TP3 471.42"
+    );
+    expect(result).not.toBeNull();
+    expect(result!.action).toBe("BUY");
+    expect(result!.entry).toBe(469);
+    expect(result!.sl).toBe(459.41);
+    expect(result!.tp).toEqual([467.72, 468.80, 471.42]);
+    expect(result!.orderType).toBe("trigger");
+  });
+
+  it("accepts trigger SELL with TPs above entry price", () => {
+    const result = parseSignal(
+      "SELL ZECUSDT@440 SL 450 TP1 445 TP2 448 TP3 430"
+    );
+    expect(result).not.toBeNull();
+    expect(result!.action).toBe("SELL");
+    expect(result!.entry).toBe(440);
+    expect(result!.sl).toBe(450);
+    expect(result!.tp).toEqual([445, 448, 430]);
+    expect(result!.orderType).toBe("trigger");
   });
 });
 

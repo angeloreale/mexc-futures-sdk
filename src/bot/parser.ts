@@ -79,9 +79,19 @@ export function parseSignal(
   if (!isMarketEntry && (!isFinite(entry) || entry <= 0)) return null;
 
   // Validate SL direction relative to entry (skip for market — entry unknown)
+  // If direction is wrong, log an error but still process the signal — the user
+  // may have a specific strategy in mind.
   if (!isMarketEntry) {
-    if (action === "BUY" && sl >= entry) return null;
-    if (action === "SELL" && sl <= entry) return null;
+    if (action === "BUY" && sl >= entry) {
+      console.error(
+        `⚠️ [Parser] SL direction warning: BUY ${rawSymbol}@${entry} SL=${sl} — SL should be below entry for longs`
+      );
+    }
+    if (action === "SELL" && sl <= entry) {
+      console.error(
+        `⚠️ [Parser] SL direction warning: SELL ${rawSymbol}@${entry} SL=${sl} — SL should be above entry for shorts`
+      );
+    }
   }
 
   // Extract TP values
@@ -96,11 +106,20 @@ export function parseSignal(
   // Reset lastIndex for the global regex
   TP_REGEX.lastIndex = 0;
 
-  // Validate TP direction if provided (skip for market — entry unknown)
+  // Validate TP direction relative to entry (skip for market — entry unknown)
+  // If direction is wrong, log an error but still process the signal.
   if (!isMarketEntry) {
     for (const tp of tpValues) {
-      if (action === "BUY" && tp <= entry) return null; // TP must be above entry for longs
-      if (action === "SELL" && tp >= entry) return null; // TP must be below entry for shorts
+      if (action === "BUY" && tp <= entry) {
+        console.error(
+          `⚠️ [Parser] TP direction warning: BUY ${rawSymbol}@${entry} TP=${tp} — TP should be above entry for longs`
+        );
+      }
+      if (action === "SELL" && tp >= entry) {
+        console.error(
+          `⚠️ [Parser] TP direction warning: SELL ${rawSymbol}@${entry} TP=${tp} — TP should be below entry for shorts`
+        );
+      }
     }
   }
 
