@@ -52,8 +52,12 @@ export function calculatePositionSize(
 
   // Check min/max volume
   if (volume < contract.minVol) {
+    const minNotional = contract.minVol * contractSize * entry;
+    const requiredEquity = minNotional / leverage;
     logger.warn(
-      `⚠️ Calculated volume ${volume} is below min ${contract.minVol} for ${contract.symbol} — skipping`
+      `⚠️ Position too small: calculated ${volume} < min ${contract.minVol} for ${contract.symbol}. ` +
+      `Min notional ≈ ${minNotional.toFixed(2)} USDT, ` +
+      `needs ~${requiredEquity.toFixed(2)} USDT equity at ${leverage}x (have ${equity.toFixed(2)})`
     );
     return null;
   }
@@ -85,25 +89,34 @@ export function calculatePositionSize(
   // Determine side
   const side: 1 | 3 = action === "BUY" ? 1 : 3;
 
+  // Round all prices to contract price precision (entry, SL, TP)
+  const priceScale = contract.priceScale || 0;
+  const pFactor = Math.pow(10, priceScale);
+  const roundPrice = (p: number) => {
+    if (priceScale > 0) {
+      return Math.round(p * pFactor) / pFactor;
+    }
+    return p;
+  };
+
+  const roundedEntry = roundPrice(entry);
+  const roundedSl = roundPrice(sl);
+
   // Determine TP targets
   let allTpTargets = [...tpValues];
   if (allTpTargets.length === 0) {
     // Default TP at config.defaultTpRatio * R from entry
     const tpDistance = stopDistance * config.defaultTpRatio;
     const defaultTp =
-      action === "BUY" ? entry + tpDistance : entry - tpDistance;
+      action === "BUY" ? roundedEntry + tpDistance : roundedEntry - tpDistance;
     allTpTargets = [defaultTp];
     logger.info(
       `📍 No TP in signal — using default ${config.defaultTpRatio}R: ${defaultTp}`
     );
   }
 
-  // Round TP to price precision
-  const priceScale = contract.priceScale || 0;
-  if (priceScale > 0) {
-    const pFactor = Math.pow(10, priceScale);
-    allTpTargets = allTpTargets.map((tp) => Math.round(tp * pFactor) / pFactor);
-  }
+  // Round TP targets
+  allTpTargets = allTpTargets.map(roundPrice);
 
   // Primary TP is the first target
   const takeProfitPrice = allTpTargets[0];
@@ -115,10 +128,14 @@ export function calculatePositionSize(
     side,
     leverage,
     openType: config.openType,
-    stopLossPrice: sl,
+    entry: roundedEntry,
+    stopLossPrice: roundedSl,
     takeProfitPrice,
     allTpTargets,
     equity,
     riskAmount,
+    minVol: contract.minVol,
+    volScale: contract.volScale || 0,
+    volUnit: contract.volUnit || 1,
   };
 }

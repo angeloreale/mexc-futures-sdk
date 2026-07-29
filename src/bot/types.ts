@@ -37,7 +37,9 @@ export interface ResolvedTrade {
   leverage: number;
   /** Open type: 1=isolated, 2=cross */
   openType: 1 | 2;
-  /** Stop-loss price */
+  /** Entry price (rounded to contract priceScale) */
+  entry: number;
+  /** Stop-loss price (rounded to contract priceScale) */
   stopLossPrice: number;
   /** Take-profit price (first/only target for the main order) */
   takeProfitPrice: number;
@@ -47,6 +49,12 @@ export interface ResolvedTrade {
   equity: number;
   /** Risk amount (equity * riskPercent) */
   riskAmount: number;
+  /** Minimum order volume (contracts) */
+  minVol: number;
+  /** Volume scale (decimal places) */
+  volScale: number;
+  /** Volume step unit */
+  volUnit: number;
 }
 
 /**

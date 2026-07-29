@@ -22,6 +22,9 @@ export class SignalBot {
   private resolver: ContractResolver;
   private executor: TradeExecutor;
   private state: BotState;
+  /** Cache account equity for 10s to avoid rate limits on rapid signals. */
+  private equityCache: { equity: number; ts: number } | null = null;
+  private readonly EQUITY_CACHE_TTL_MS = 10_000;
 
   constructor(config: BotConfig) {
     this.config = config;
@@ -160,6 +163,28 @@ export class SignalBot {
   }
 
   /**
+   * Fetch account equity with a 10-second cache to avoid MEXC rate limits (code 513).
+   */
+  private async fetchEquity(): Promise<number> {
+    const now = Date.now();
+    if (this.equityCache && now - this.equityCache.ts < this.EQUITY_CACHE_TTL_MS) {
+      this.logger.debug(`📦 Using cached equity: ${this.equityCache.equity}`);
+      return this.equityCache.equity;
+    }
+
+    const asset = await this.mexcClient.getAccountAsset(this.config.baseCurrency);
+    this.logger.info("📦 Raw asset response:", JSON.stringify(asset));
+
+    // Extract equity: try standard { success, code, data: {...} } wrapper first,
+    // then fall back to the response object itself.
+    const inner = asset.data ?? asset;
+    const equity: number = (inner as any).equity ?? 0;
+
+    this.equityCache = { equity, ts: now };
+    return equity;
+  }
+
+  /**
    * Full pipeline: normalize → resolve → size → execute.
    */
   private async processSignal(signal: TradeSignal): Promise<void> {
@@ -183,13 +208,14 @@ export class SignalBot {
       `✅ Contract found: ${contract.symbol} (size=${contract.contractSize}, minVol=${contract.minVol})`
     );
 
-    // 3. Get account equity
+    // 3. Get account equity (cached for 10s to avoid rate limits)
     let equity: number;
     try {
-      const asset = await this.mexcClient.getAccountAsset(this.config.baseCurrency);
-      equity = asset.data?.equity || 0;
+      equity = await this.fetchEquity();
       if (equity <= 0) {
-        this.logger.error("❌ Account equity is zero or negative — cannot size position");
+        this.logger.error(
+          `❌ Account equity is ${equity} ${this.config.baseCurrency} — cannot size position`
+        );
         return;
       }
       this.logger.info(`💰 Account equity: ${equity} ${this.config.baseCurrency}`);
@@ -221,7 +247,10 @@ export class SignalBot {
       this.logger
     );
     if (!resolvedTrade) {
-      this.logger.warn("⚠️ Position sizing failed — skipping trade");
+      // The sizer already logged a specific reason (stop distance, minVol, notional, etc.)
+      this.logger.warn(
+        `⚠️ Position sizing failed for ${mexcSymbol} (equity=${equity.toFixed(2)}, risk=${(this.config.riskPercent * 100).toFixed(1)}%) — skipping trade`
+      );
       return;
     }
 

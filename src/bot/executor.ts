@@ -31,7 +31,7 @@ export class TradeExecutor {
         `   Symbol: ${trade.mexcSymbol}, Side: ${trade.side === 1 ? "LONG" : "SHORT"}`
       );
       this.logger.info(
-        `   Volume: ${trade.volume}, Entry: ${trade.signal.entry}, SL: ${trade.stopLossPrice}`
+        `   Volume: ${trade.volume}, Entry: ${trade.entry}, SL: ${trade.stopLossPrice}`
       );
       this.logger.info(`   TP targets: ${trade.allTpTargets.join(", ")}`);
       this.logger.info(
@@ -72,18 +72,48 @@ export class TradeExecutor {
       return records;
     }
 
-    // Multiple TP targets: split volume equally
-    const targetCount = trade.allTpTargets.length;
-    const volPerTarget = Math.floor(
-      (trade.volume / targetCount) * 100
-    ) / 100; // rough split
+    // Multiple TP targets: split volume equally, respecting contract precision.
+    // Only split across as many targets as can hold at least minVol each.
+    const { minVol, volScale, volUnit } = trade;
+    const maxSplits = Math.floor(trade.volume / minVol);
+    if (maxSplits < 2) {
+      // Not enough volume to split — submit as a single order with the first TP
+      this.logger.info(
+        `📎 Volume ${trade.volume} too small to split across ${trade.allTpTargets.length} TPs (minVol=${minVol}) — using single TP=${trade.takeProfitPrice}`
+      );
+      const record = await this.submitSingleOrder(trade, trade.volume, trade.takeProfitPrice);
+      records.push(record);
+      this.logTradeRecord(record);
+      return records;
+    }
+
+    const targetCount = Math.min(trade.allTpTargets.length, maxSplits);
+    if (targetCount < trade.allTpTargets.length) {
+      this.logger.info(
+        `📎 Volume ${trade.volume} can only split across ${targetCount}/${trade.allTpTargets.length} TPs (minVol=${minVol})`
+      );
+    }
+
+    // Round helper using contract volScale
+    const roundVol = (v: number): number => {
+      const stepped = Math.floor(v / volUnit) * volUnit;
+      if (volScale > 0) {
+        const factor = Math.pow(10, volScale);
+        return Math.floor(stepped * factor) / factor;
+      }
+      return stepped;
+    };
+
+    const rawPerTarget = trade.volume / targetCount;
+    const volPerTarget = roundVol(rawPerTarget);
 
     // Give remainder to the first target
-    const remainder = trade.volume - volPerTarget * targetCount;
+    const used = volPerTarget * targetCount;
+    const remainder = roundVol(trade.volume - used);
 
     for (let i = 0; i < targetCount; i++) {
       const vol = i === 0 ? volPerTarget + remainder : volPerTarget;
-      if (vol <= 0) continue;
+      if (vol < minVol) continue;
 
       const tp = trade.allTpTargets[i];
       const record = await this.submitSingleOrder(trade, vol, tp);
@@ -115,7 +145,7 @@ export class TradeExecutor {
 
     const orderParams: SubmitOrderRequest = {
       symbol: trade.mexcSymbol,
-      price: trade.signal.entry,
+      price: trade.entry,
       vol: volume,
       side: trade.side,
       type: 5, // market order
@@ -127,7 +157,7 @@ export class TradeExecutor {
     };
 
     this.logger.info(
-      `🚀 Submitting order: ${trade.mexcSymbol} ${trade.side === 1 ? "LONG" : "SHORT"} vol=${volume} entry=${trade.signal.entry} SL=${trade.stopLossPrice} TP=${takeProfitPrice}`
+      `🚀 Submitting order: ${trade.mexcSymbol} ${trade.side === 1 ? "LONG" : "SHORT"} vol=${volume} entry=${trade.entry} SL=${trade.stopLossPrice} TP=${takeProfitPrice}`
     );
 
     try {
@@ -178,7 +208,7 @@ export class TradeExecutor {
       symbol: t.mexcSymbol,
       side: t.side === 1 ? "LONG" : "SHORT",
       volume: t.volume,
-      entry: t.signal.entry,
+      entry: t.entry,
       sl: t.stopLossPrice,
       tp: t.takeProfitPrice,
       leverage: t.leverage,
