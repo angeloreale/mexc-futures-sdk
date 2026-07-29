@@ -6,6 +6,8 @@ import { Logger } from "../../utils/logger";
 const logger = new Logger("SILENT");
 
 const defaultConfig: BotConfig = {
+  mexcApiKey: "",
+  mexcSecretKey: "",
   mexcAuthToken: "test",
   telegramBotToken: "test",
   allowedChannels: ["123"],
