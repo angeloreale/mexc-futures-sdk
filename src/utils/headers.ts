@@ -1,8 +1,14 @@
 import { DEFAULT_HEADERS } from "./constants";
 import md5 from "md5";
+import * as crypto from "crypto";
 
 export interface SDKOptions {
-  authToken: string; // WEB authentication token from browser
+  /** MEXC API key (e.g. "mx0...") — preferred */
+  apiKey?: string;
+  /** MEXC API secret key — required with apiKey */
+  secretKey?: string;
+  /** WEB authentication token from browser (legacy, starts with "WEB...") */
+  authToken?: string;
   userAgent?: string;
   customHeaders?: Record<string, string>; // Additional custom headers
 }
@@ -26,11 +32,11 @@ function mexcCrypto(key: string, obj: any): { time: string; sign: string } {
 }
 
 /**
- * Generate HTTP headers for API requests
- * @param options SDK configuration options
- * @param includeAuth Whether to include authentication headers
- * @param requestBody Request body for signature (optional)
- * @returns Record of HTTP headers
+ * Generate HTTP headers for API requests.
+ *
+ * Supports two authentication modes:
+ * 1. API Key + Secret Key (preferred): uses HMAC-SHA256 signing
+ * 2. Browser WEB token (legacy): uses MD5-based signing
  */
 export function generateHeaders(
   options: SDKOptions,
@@ -53,18 +59,45 @@ export function generateHeaders(
 
   // Add authentication headers for private endpoints
   if (includeAuth) {
-    // Use WEB token for authentication
-    headers["authorization"] = options.authToken;
+    if (options.apiKey && options.secretKey) {
+      // --- API Key + Secret Key auth (HMAC-SHA256) ---
+      headers["ApiKey"] = options.apiKey;
 
-    // Add MEXC signature for POST requests with body
-    if (requestBody) {
-      const signature = mexcCrypto(options.authToken, requestBody);
+      if (requestBody) {
+        const dateNow = String(Date.now());
+        const bodyStr = typeof requestBody === "string"
+          ? requestBody
+          : JSON.stringify(requestBody);
+        const signPayload = options.apiKey + dateNow + bodyStr;
+        const signature = crypto
+          .createHmac("sha256", options.secretKey)
+          .update(signPayload)
+          .digest("hex");
 
-      headers["x-mxc-nonce"] = signature.time;
-      headers["x-mxc-sign"] = signature.sign;
-      // NOTE: the signature/nonce are request secrets and must never be logged.
-      // The request method/URL/body are already logged at debug level by the client's
-      // request interceptor (gated by logLevel), so nothing useful is lost here.
+        headers["Request-Time"] = dateNow;
+        headers["Signature"] = signature;
+      } else {
+        // For GET requests, sign with just apiKey + timestamp
+        const dateNow = String(Date.now());
+        const signature = crypto
+          .createHmac("sha256", options.secretKey)
+          .update(options.apiKey + dateNow)
+          .digest("hex");
+
+        headers["Request-Time"] = dateNow;
+        headers["Signature"] = signature;
+      }
+    } else if (options.authToken) {
+      // --- Legacy browser WEB token auth (MD5-based) ---
+      headers["authorization"] = options.authToken;
+
+      // Add MEXC signature for POST requests with body
+      if (requestBody) {
+        const signature = mexcCrypto(options.authToken, requestBody);
+
+        headers["x-mxc-nonce"] = signature.time;
+        headers["x-mxc-sign"] = signature.sign;
+      }
     }
   }
 

@@ -49,7 +49,12 @@ const jsonBig = JSONBigInt({
 });
 
 export interface MexcFuturesSDKConfig {
-  authToken: string; // WEB authentication key (starts with "WEB...")
+  /** MEXC API key (e.g. "mx0...") — preferred for programmatic trading */
+  apiKey?: string;
+  /** MEXC API secret key — required when apiKey is set */
+  secretKey?: string;
+  /** WEB authentication key from browser session (legacy, starts with "WEB...") */
+  authToken?: string;
   baseURL?: string;
   timeout?: number;
   userAgent?: string;
@@ -66,10 +71,21 @@ export class MexcFuturesSDK {
     this.config = config;
     this.logger = new Logger(config.logLevel);
 
+    if (!config.apiKey && !config.authToken) {
+      throw new Error(
+        "MexcFuturesSDK: either apiKey+secretKey or authToken must be provided"
+      );
+    }
+    if (config.apiKey && !config.secretKey) {
+      throw new Error(
+        "MexcFuturesSDK: secretKey is required when apiKey is provided"
+      );
+    }
+
     this.httpClient = axios.create({
       baseURL: config.baseURL || "https://futures.mexc.com/api/v1",
       timeout: config.timeout || 30000,
-      headers: generateHeaders(config),
+      headers: generateHeaders(this.getAuthOptions()),
       // Parse responses with a big-int-safe JSON parser. MEXC order ids exceed
       // Number.MAX_SAFE_INTEGER (e.g. 817027833053397504), and the default JSON.parse
       // silently corrupts them (…397504 -> …397500). JSONBigInt preserves them as BigInt
@@ -132,6 +148,19 @@ export class MexcFuturesSDK {
   }
 
   /**
+   * Build auth options for generateHeaders, preferring API key auth over browser token.
+   */
+  private getAuthOptions() {
+    return {
+      apiKey: this.config.apiKey,
+      secretKey: this.config.secretKey,
+      authToken: this.config.authToken,
+      userAgent: this.config.userAgent,
+      customHeaders: this.config.customHeaders,
+    };
+  }
+
+  /**
    * Submit order using /api/v1/private/order/submit endpoint
    * This is the alternative order submission method used by MEXC browser
    */
@@ -182,11 +211,7 @@ export class MexcFuturesSDK {
 
       // Generate headers with MEXC signature
       const headers = generateHeaders(
-        {
-          authToken: this.config.authToken,
-          userAgent: this.config.userAgent,
-          customHeaders: this.config.customHeaders,
-        },
+        this.getAuthOptions(),
         true,
         orderParams
       );
@@ -234,11 +259,7 @@ export class MexcFuturesSDK {
 
       // Generate headers with MEXC signature for POST request
       const headers = generateHeaders(
-        {
-          authToken: this.config.authToken,
-          userAgent: this.config.userAgent,
-          customHeaders: this.config.customHeaders,
-        },
+        this.getAuthOptions(),
         true,
         ids
       );
@@ -268,11 +289,7 @@ export class MexcFuturesSDK {
     try {
       // Generate headers with MEXC signature for POST request
       const headers = generateHeaders(
-        {
-          authToken: this.config.authToken,
-          userAgent: this.config.userAgent,
-          customHeaders: this.config.customHeaders,
-        },
+        this.getAuthOptions(),
         true,
         params
       );
@@ -307,11 +324,7 @@ export class MexcFuturesSDK {
 
       // Generate headers with MEXC signature for POST request
       const headers = generateHeaders(
-        {
-          authToken: this.config.authToken,
-          userAgent: this.config.userAgent,
-          customHeaders: this.config.customHeaders,
-        },
+        this.getAuthOptions(),
         true,
         payload
       );

@@ -27,9 +27,11 @@ export class SignalBot {
     this.config = config;
     this.logger = new Logger(config.logLevel);
 
-    // Initialize MEXC client
+    // Initialize MEXC client (prefers API key auth over browser token)
     this.mexcClient = new MexcFuturesSDK({
-      authToken: config.mexcAuthToken,
+      apiKey: config.mexcApiKey || undefined,
+      secretKey: config.mexcSecretKey || undefined,
+      authToken: config.mexcAuthToken || undefined,
       logLevel: config.logLevel,
     });
 

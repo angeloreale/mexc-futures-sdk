@@ -64,7 +64,11 @@ export interface TradeRecord {
  * Bot configuration loaded from environment.
  */
 export interface BotConfig {
-  /** MEXC WEB auth token */
+  /** MEXC API key (e.g. "mx0...") */
+  mexcApiKey: string;
+  /** MEXC API secret key */
+  mexcSecretKey: string;
+  /** MEXC WEB auth token (browser session token, legacy) */
   mexcAuthToken: string;
   /** Telegram Bot API token */
   telegramBotToken: string;

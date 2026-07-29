@@ -7,7 +7,18 @@ import { BotConfig } from "./types";
 export function loadConfig(): BotConfig {
   const env = process.env;
 
-  const mexcAuthToken = requireEnv("MEXC_AUTH_TOKEN");
+  // Support both MEXC_KEY + MEXC_SECRET_KEY (API key auth) and
+  // MEXC_AUTH_TOKEN (browser WEB token auth). API keys take priority.
+  const mexcApiKey = env.MEXC_KEY || "";
+  const mexcSecretKey = env.MEXC_SECRET_KEY || "";
+  const mexcAuthToken = env.MEXC_AUTH_TOKEN || "";
+
+  if (!mexcApiKey && !mexcAuthToken) {
+    throw new Error(
+      "Either MEXC_KEY + MEXC_SECRET_KEY (API keys) or MEXC_AUTH_TOKEN (browser token) must be set"
+    );
+  }
+
   const telegramBotToken = requireEnv("TELEGRAM_BOT_TOKEN");
 
   const allowedChannels = (env.ALLOWED_CHANNELS || "")
@@ -43,6 +54,8 @@ export function loadConfig(): BotConfig {
   const stateFilePath = env.STATE_FILE_PATH || "./bot-state.json";
 
   const config: BotConfig = {
+    mexcApiKey,
+    mexcSecretKey,
     mexcAuthToken,
     telegramBotToken,
     allowedChannels,
