@@ -1,20 +1,31 @@
 import { TradeSignal } from "./types";
 
 /**
- * Regex for signal formats:
+ * Regexes for signal formats:
  *   BUY TAOUSDT@187.54 SL 185.13 TP 188.81
+ *   BUY ZECUSDT EP 460 SL 459.41 TP1 467.72
  *   SELL BTCUSDT@65000 SL 66000 TP1 64000 TP2 63000 TP3 62000
  *   BUY ETHUSDT@3500 SL 3400
+ *   BUY ZECUSDT SL 459.41 TP1 467.72 TP2 468.80 TP3 471.42  (market — no @/EP)
  *
- * Captures:
+ * SIGNAL_REGEX captures (with @price or EP price):
  *   1: action (BUY|SELL)
  *   2: symbol (e.g. TAOUSDT, USDJPY)
  *   3: entry price
  *   4: SL price
  *   5: rest of line for TP extraction
+ *
+ * SIGNAL_REGEX_MARKET captures (market — no entry price):
+ *   1: action (BUY|SELL)
+ *   2: symbol
+ *   3: SL price
+ *   4: rest of line for TP extraction
  */
 const SIGNAL_REGEX =
   /\b(BUY|SELL)\s+([A-Z][A-Z0-9]{2,19})@(\d+(?:\.\d+)?)\s+SL\s+(\d+(?:\.\d+)?)(.*)/i;
+
+const SIGNAL_REGEX_MARKET =
+  /\b(BUY|SELL)\s+([A-Z][A-Z0-9]{2,19})\s+SL\s+(\d+(?:\.\d+)?)(.*)/i;
 
 /**
  * Extract one or more TP values from the remainder of the signal line.
@@ -37,22 +48,41 @@ export function parseSignal(
   // Normalize whitespace but preserve case for regex
   const cleaned = text.replace(/\s+/g, " ").trim();
 
-  const match = cleaned.match(SIGNAL_REGEX);
+  // Normalize "EP 460" → "@460" so both EP and @ formats work with the same regex
+  const epNormalized = cleaned.replace(/\bEP\s+(\d+(?:\.\d+)?)\b/i, "@$1");
+
+  // Try @price regex first
+  let match = epNormalized.match(SIGNAL_REGEX);
+  let isMarketEntry = false;
+
+  if (!match) {
+    // Try market-entry regex (no @/EP)
+    match = cleaned.match(SIGNAL_REGEX_MARKET);
+    isMarketEntry = true;
+  }
+
   if (!match) return null;
 
   const action = match[1].toUpperCase() as "BUY" | "SELL";
   const rawSymbol = match[2].toUpperCase();
-  const entry = parseFloat(match[3]);
-  const sl = parseFloat(match[4]);
-  const tpSection = match[5] || "";
 
-  // Validate entry and SL are positive finite numbers
-  if (!isFinite(entry) || entry <= 0) return null;
+  // Market entry uses 0 as sentinel; @price/EP uses the captured entry price
+  const entry = isMarketEntry ? 0 : parseFloat(match[3]);
+  const slIdx = isMarketEntry ? 3 : 4;
+  const sl = parseFloat(match[slIdx]);
+  const tpSection = match[slIdx + 1] || "";
+
+  // Validate SL is a positive finite number
   if (!isFinite(sl) || sl <= 0) return null;
 
-  // Validate SL direction relative to entry
-  if (action === "BUY" && sl >= entry) return null; // SL must be below entry for longs
-  if (action === "SELL" && sl <= entry) return null; // SL must be above entry for shorts
+  // Validate entry is a positive finite number (skip for market — resolved later)
+  if (!isMarketEntry && (!isFinite(entry) || entry <= 0)) return null;
+
+  // Validate SL direction relative to entry (skip for market — entry unknown)
+  if (!isMarketEntry) {
+    if (action === "BUY" && sl >= entry) return null;
+    if (action === "SELL" && sl <= entry) return null;
+  }
 
   // Extract TP values
   const tpValues: number[] = [];
@@ -66,10 +96,12 @@ export function parseSignal(
   // Reset lastIndex for the global regex
   TP_REGEX.lastIndex = 0;
 
-  // Validate TP direction if provided
-  for (const tp of tpValues) {
-    if (action === "BUY" && tp <= entry) return null; // TP must be above entry for longs
-    if (action === "SELL" && tp >= entry) return null; // TP must be below entry for shorts
+  // Validate TP direction if provided (skip for market — entry unknown)
+  if (!isMarketEntry) {
+    for (const tp of tpValues) {
+      if (action === "BUY" && tp <= entry) return null; // TP must be above entry for longs
+      if (action === "SELL" && tp >= entry) return null; // TP must be below entry for shorts
+    }
   }
 
   return {

@@ -208,6 +208,23 @@ export class SignalBot {
       `✅ Contract found: ${contract.symbol} (size=${contract.contractSize}, minVol=${contract.minVol})`
     );
 
+    // 2.5. If signal has no entry price (market order), resolve it via ticker
+    if (signal.entry === 0) {
+      try {
+        const ticker = await this.mexcClient.getTicker(mexcSymbol);
+        const marketPrice = ticker?.data?.lastPrice;
+        if (!marketPrice || marketPrice <= 0) {
+          this.logger.error(`❌ Could not resolve market price for ${mexcSymbol}`);
+          return;
+        }
+        signal.entry = marketPrice;
+        this.logger.info(`💹 Market entry resolved: ${mexcSymbol} @ ${marketPrice}`);
+      } catch (error) {
+        this.logger.error(`❌ Failed to fetch ticker for ${mexcSymbol}:`, error);
+        return;
+      }
+    }
+
     // 3. Get account equity (cached for 10s to avoid rate limits)
     let equity: number;
     try {

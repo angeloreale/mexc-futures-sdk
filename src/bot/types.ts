@@ -8,7 +8,7 @@ export interface TradeSignal {
   action: "BUY" | "SELL";
   /** Symbol as it appeared in the message (e.g. "TAOUSDT") */
   rawSymbol: string;
-  /** Entry price from the signal */
+  /** Entry price from the signal; 0 means market entry (resolved later via ticker) */
   entry: number;
   /** Stop-loss price */
   sl: number;

@@ -14,6 +14,12 @@ export function calculatePositionSize(
 ): ResolvedTrade | null {
   const { entry, sl, action, tp: tpValues } = signal;
 
+  // Guard: market entries must be resolved to a real price before sizing
+  if (entry <= 0) {
+    logger.warn("⚠️ Entry price is 0 (market unresolved) — cannot size position");
+    return null;
+  }
+
   // Compute stop distance (always positive)
   const stopDistance = Math.abs(entry - sl);
   if (stopDistance <= 0) {
