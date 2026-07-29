@@ -1,0 +1,30 @@
+[Unit]
+Description=MEXC Telegram Signal Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mexcbot
+Group=mexcbot
+WorkingDirectory=/opt/mexc-signal-bot
+ExecStart=/usr/bin/node dist/bot/index.js
+Restart=always
+RestartSec=10
+
+# Load environment from file
+EnvironmentFile=/opt/mexc-signal-bot/.env
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/mexc-signal-bot
+
+# Logging to journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mexc-signal-bot
+
+[Install]
+WantedBy=multi-user.target
