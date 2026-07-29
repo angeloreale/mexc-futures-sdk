@@ -1,6 +1,6 @@
-# MEXC Futures SDK
+# MEXC Futures SDK + Telegram Signal Bot
 
-A TypeScript SDK for MEXC Futures trading with REST API and WebSocket support.
+A TypeScript SDK for MEXC Futures trading with REST API and WebSocket support, plus a built-in Telegram signal bot that auto-executes trades from channel messages.
 
 ⚠️ **DISCLAIMER**: This SDK uses browser session tokens and reverse-engineered endpoints. MEXC does not officially support futures trading through API. Use at your own risk.
 
@@ -10,33 +10,432 @@ A TypeScript SDK for MEXC Futures trading with REST API and WebSocket support.
   <a href="https://www.npmjs.com/package/mexc-futures-sdk"><img src="https://img.shields.io/npm/v/mexc-futures-sdk?style=for-the-badge&logo=npm&color=CB3837" alt="npm version"></a>
 </p>
 
-## 💬 Community
+---
 
-Join the **[MEXC Traders Discord](https://discord.gg/bZeQd4rMW9)** — discuss MEXC trading, this SDK, strategies, and get help. For direct contact: **[Telegram @yobebka](https://t.me/yobebka)**.
+## Table of Contents
 
-## Features
+- [Quick Start (Local Bot)](#quick-start-local-bot)
+- [Authentication](#authentication)
+- [Telegram Signal Bot](#-telegram-signal-bot)
+  - [How It Works](#how-it-works)
+  - [Signal Formats](#signal-formats)
+  - [Configuration Reference](#configuration-reference)
+  - [Running Locally](#running-locally)
+- [Creating the Telegram Bot & Adding Channels](#-creating-the-telegram-bot--adding-channels)
+- [Remote Server Deployment](#-remote-server-deployment)
+  - [Option A: Manual Setup (Ubuntu/Debian)](#option-a-manual-setup-ubuntudebian)
+  - [Option B: systemd Service](#option-b-systemd-service)
+  - [Option C: Docker](#option-c-docker)
+- [SDK Usage (Programmatic)](#sdk-usage-programmatic)
+- [API Reference](#api-reference)
+- [Safety Features](#safety-features)
 
-- ✅ **REST API** - Complete trading functionality
-- ✅ **WebSocket** - Real-time market data and account updates
-- ✅ **TypeScript** - Full type definitions
-- ✅ **Auto-reconnect** - Reliable WebSocket connections
-- ✅ **Error handling** - Comprehensive error management
+---
 
-## Installation
+## Quick Start (Local Bot)
 
 ```bash
-npm install mexc-futures-sdk
+# 1. Install dependencies
+npm install
+
+# 2. Copy and configure environment
+cp .env.example .env
+# Edit .env with your MEXC keys and Telegram bot token
+
+# 3. Build the project
+npm run build
+
+# 4. Run in dry-run mode first (no real trades)
+DRY_RUN=true npm run bot
+
+# 5. When ready, enable live trading
+DRY_RUN=false npm run bot
 ```
 
-## Quick Start
+---
+
+## Authentication
+
+The SDK supports **two** authentication methods. API keys are preferred for bot usage.
+
+### Method 1: MEXC API Key + Secret (Recommended)
+
+Set these in your `.env`:
+
+```bash
+MEXC_KEY=mx0vglS6XtxqHJsEse        # Your MEXC API key
+MEXC_SECRET_KEY=60cbe8535ba64...    # Your MEXC API secret
+```
+
+The bot uses HMAC-SHA256 signing with these credentials.
+
+### Method 2: Browser WEB Token (Legacy)
+
+1. Login to MEXC Futures in your browser
+2. Open Developer Tools (F12) → Network tab
+3. Make any request to `futures.mexc.com`
+4. Find the `authorization` header (starts with `WEB...`)
+5. Set `MEXC_AUTH_TOKEN=WEB...` in your `.env`
+
+---
+
+## 🤖 Telegram Signal Bot
+
+The bot listens for trading signals posted in Telegram channels, parses them, validates against MEXC contracts, sizes positions based on your risk parameters, and executes trades automatically.
+
+### How It Works
+
+```mermaid
+flowchart LR
+    A[Telegram Channel] -->|New Message| B[Bot Listens]
+    B -->|Matches Signal Format| C[Parse Signal]
+    C --> D[Normalize Symbol]
+    D --> E[Resolve MEXC Contract]
+    E --> F[Fetch Account Equity]
+    F --> G[Calculate Position Size]
+    G --> H{Dry Run?}
+    H -->|Yes| I[Log Only]
+    H -->|No| J[Submit Order to MEXC]
+    J --> K[Track in State File]
+```
+
+### Signal Formats
+
+The bot recognizes these signal patterns:
+
+```
+BUY TAOUSDT@187.54 SL 185.13 TP 188.81
+SELL BTCUSDT@65000 SL 66000 TP 63000
+BUY ETHUSDT@3500 SL 3400 TP1 3600 TP2 3700 TP3 3800
+BUY SOLUSDT@150 SL 145
+```
+
+| Element | Meaning |
+|---|---|
+| `BUY` / `SELL` | Direction: BUY = long, SELL = short |
+| `SYMBOL@PRICE` | Trading pair and entry price |
+| `SL <price>` | Stop-loss price (mandatory) |
+| `TP <price>` | Take-profit (optional — defaults to 1.5× risk) |
+| `TP1/TP2/TP3` | Multiple TP targets — volume is split equally |
+
+**Symbol normalization**: `TAOUSDT` → `TAO_USDT`, `BTCUSDT` → `BTC_USDT`
+
+### Configuration Reference
+
+All settings are environment variables. Copy `.env.example` and fill in:
+
+| Variable | Default | Description |
+|---|---|---|
+| **Required** | | |
+| `MEXC_KEY` | — | MEXC API key (starts with `mx0...`) |
+| `MEXC_SECRET_KEY` | — | MEXC API secret key |
+| `TELEGRAM_BOT_TOKEN` | — | Telegram Bot token from @BotFather |
+| `ALLOWED_CHANNELS` | — | Comma-separated channel IDs or usernames |
+| **Trading** | | |
+| `DEFAULT_LEVERAGE` | `10` | Leverage (1–200) |
+| `OPEN_TYPE` | `1` | `1` = isolated margin, `2` = cross margin |
+| `RISK_PERCENT` | `0.01` | Risk per trade (0.01 = 1% of equity) |
+| `DEFAULT_TP_RATIO` | `1.5` | Default TP:SL ratio when no TP in signal |
+| `MAX_CONCURRENT_TRADES` | `5` | Max simultaneous open positions |
+| `MAX_NOTIONAL_PER_TRADE` | `10000` | Max USDT notional value per trade |
+| **Safety** | | |
+| `DRY_RUN` | `true` | Parse & size, but don't submit orders |
+| `TRADING_ENABLED` | `true` | Master trading on/off switch |
+| **Other** | | |
+| `LOG_LEVEL` | `INFO` | `SILENT`, `ERROR`, `WARN`, `INFO`, `DEBUG` |
+| `BASE_CURRENCY` | `USDT` | Base currency for equity checks |
+| `STATE_FILE_PATH` | `./bot-state.json` | Idempotency state file location |
+| `MEXC_AUTH_TOKEN` | — | Legacy: browser WEB token (not needed with API keys) |
+
+### Running Locally
+
+```bash
+# Development mode (with ts-node, hot-reload not included)
+npm run bot
+
+# Production mode (pre-built)
+npm run build
+npm run bot:start
+```
+
+**First run checklist:**
+1. Start with `DRY_RUN=true` — verify signals are parsed correctly
+2. Check logs for symbol normalization and contract resolution
+3. Once confident, set `DRY_RUN=false` and `TRADING_ENABLED=true`
+4. Monitor your first few trades closely
+
+---
+
+## 📱 Creating the Telegram Bot & Adding Channels
+
+This step-by-step guide walks you through creating a Telegram bot and configuring it to monitor trading signal channels.
+
+### Step 1: Create the Bot with @BotFather
+
+1. Open Telegram and search for **@BotFather** (the official bot creation tool)
+2. Start a chat and send: `/newbot`
+3. Choose a **name** (display name, e.g. "MEXC Signal Trader")
+4. Choose a **username** (must end in `bot`, e.g. `mexc_signal_bot`)
+5. BotFather will respond with your **bot token** — save it:
+
+   ```
+   Done! Congratulations on your new bot.
+   
+   Use this token to access the HTTP API:
+   1234567890:ABCdefGHIjklMNOpqrsTUVwxyz
+   
+   Keep your token secure and store it safely.
+   ```
+
+6. Copy this token into your `.env` file:
+
+   ```bash
+   TELEGRAM_BOT_TOKEN=1234567890:ABCdefGHIjklMNOpqrsTUVwxyz
+   ```
+
+### Step 2: Disable Bot Privacy Mode (Required)
+
+By default, bots cannot read messages in group chats. You MUST disable privacy mode:
+
+1. In @BotFather, send: `/mybots`
+2. Select your bot
+3. Tap **Bot Settings** → **Group Privacy**
+4. Select **Turn off** (Disable)
+5. Confirm the change
+
+> ⚠️ **Without this step, the bot will NOT see messages in channels/groups.**
+
+### Step 3: Add the Bot to Your Signal Channels
+
+For each channel you want to monitor:
+
+1. Open the Telegram channel
+2. Tap the channel name → **Administrators** (or **Subscribers** for public channels)
+3. Tap **Add Admin** → search for your bot's username
+4. **Grant the bot admin rights** — at minimum, it needs:
+   - ✅ **Read Messages** (usually auto-granted)
+
+   > Note: The bot needs to be an **admin** of the channel (not just a subscriber) to read messages via the Bot API.
+
+5. Repeat for every channel you want to monitor.
+
+### Step 4: Get Channel IDs
+
+You need to tell the bot WHICH channels to listen to. Each channel has an identifier — either a numeric ID or a `@username`.
+
+**For public channels with a username** (e.g. `@crypto_signals`):
+```bash
+ALLOWED_CHANNELS=@crypto_signals,@btc_alerts
+```
+
+**For private channels** (numeric IDs only):
+
+1. **Method A — Forward a message to @RawDataBot:**
+   - Forward any message from the channel to **@RawDataBot**
+   - It replies with JSON containing `"chat":{"id":-1001234567890,...}`
+   - The ID will be negative (e.g. `-1001234567890`) — use the full number
+
+2. **Method B — Use the bot itself:**
+   - Temporarily add this to `bot.ts`:
+     ```typescript
+     this.telegram.on(message("text"), (ctx) => {
+       console.log("Chat ID:", ctx.chat.id);
+     });
+     ```
+   - Send a test message in the channel — the bot logs the ID
+
+3. Set the channel IDs in `.env`:
+   ```bash
+   ALLOWED_CHANNELS=-1001234567890,-1009876543210
+   ```
+
+### Step 5: Test the Setup
+
+1. Start the bot with `DRY_RUN=true`:
+   ```bash
+   npm run bot
+   ```
+2. Post a test signal in one of your channels:
+   ```
+   BUY BTCUSDT@65000 SL 64000 TP 66000
+   ```
+3. Check the bot logs — you should see:
+   ```
+   📨 Message from -1001234567890#42: BUY BTCUSDT@65000...
+   📊 Signal detected: BUY BTCUSDT@65000 SL 64000 TP 66000
+   🔄 Normalized: BTCUSDT → BTC_USDT
+   🧪 [DRY RUN] Would submit order: ...
+   ```
+
+If you see `📝 Not a trade signal — ignoring`, the message format isn't matching the parser. Check the signal format carefully.
+
+### Troubleshooting Telegram Setup
+
+| Problem | Solution |
+|---|---|
+| Bot doesn't see messages | Ensure Group Privacy is **disabled** in @BotFather |
+| "Forbidden: bot is not a member" | Add the bot as an **admin** to the channel |
+| Wrong channel ID | Private channels always have negative IDs starting with `-100` |
+| Rate limited | Telegram limits bots to ~30 msg/sec — not an issue for signal monitoring |
+
+---
+
+## 🖥 Remote Server Deployment
+
+### Prerequisites (Any Method)
+
+- A Linux server (Ubuntu 22.04+ recommended) with:
+  - Node.js 18+ installed
+  - Git installed
+  - At least 512 MB RAM (1 GB recommended)
+  - Stable internet connection
+
+### Option A: Manual Setup (Ubuntu/Debian)
+
+```bash
+# 1. Update system & install Node.js 20.x
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt update && sudo apt install -y nodejs git
+
+# 2. Create bot user (security best practice)
+sudo useradd -r -s /bin/false mexcbot
+
+# 3. Clone & set up the project
+sudo mkdir -p /opt/mexc-signal-bot
+sudo chown -R $USER:$USER /opt/mexc-signal-bot
+cd /opt/mexc-signal-bot
+git clone https://github.com/oboshto/mexc-futures-sdk.git .
+
+# 4. Install dependencies & build
+npm install
+npm run build
+
+# 5. Create .env file
+cat > .env << 'EOF'
+MEXC_KEY=mx0your_api_key_here
+MEXC_SECRET_KEY=your_secret_key_here
+TELEGRAM_BOT_TOKEN=1234567890:your_bot_token
+ALLOWED_CHANNELS=-1001234567890,-1009876543210
+DEFAULT_LEVERAGE=10
+OPEN_TYPE=1
+RISK_PERCENT=0.01
+DEFAULT_TP_RATIO=1.5
+MAX_CONCURRENT_TRADES=5
+MAX_NOTIONAL_PER_TRADE=5000
+DRY_RUN=true
+TRADING_ENABLED=false
+LOG_LEVEL=INFO
+BASE_CURRENCY=USDT
+STATE_FILE_PATH=/opt/mexc-signal-bot/bot-state.json
+EOF
+
+# 6. Test it
+DRY_RUN=true node dist/bot/index.js
+# Ctrl+C after confirming it starts successfully
+
+# 7. Run in background (temporary test)
+nohup node dist/bot/index.js > bot.log 2>&1 &
+# Check logs: tail -f bot.log
+```
+
+### Option B: systemd Service
+
+The repo includes a ready-to-use systemd service file at `deploy/mexc-signal-bot.service`:
+
+```bash
+# 1. Complete manual setup above first, then:
+
+# 2. Fix ownership
+sudo chown -R mexcbot:mexcbot /opt/mexc-signal-bot
+
+# 3. Install the systemd service
+sudo cp deploy/mexc-signal-bot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+
+# 4. Start and enable (auto-start on boot)
+sudo systemctl enable --now mexc-signal-bot
+
+# 5. Check status
+sudo systemctl status mexc-signal-bot
+
+# 6. View logs
+sudo journalctl -u mexc-signal-bot -f
+
+# 7. Common management commands
+sudo systemctl stop mexc-signal-bot       # Stop the bot
+sudo systemctl restart mexc-signal-bot    # Restart after .env changes
+sudo systemctl disable mexc-signal-bot    # Disable auto-start
+```
+
+The service file uses:
+- Systemd journal for logging (view with `journalctl`)
+- Environment file at `/opt/mexc-signal-bot/.env`
+- Automatic restart on crash (10s delay)
+- Security hardening (no new privileges, read-only filesystem except bot directory)
+
+### Option C: Docker
+
+Create a `Dockerfile` in the project root:
+
+```dockerfile
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM node:20-alpine
+RUN addgroup -S mexcbot && adduser -S mexcbot -G mexcbot
+WORKDIR /app
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./
+USER mexcbot
+CMD ["node", "dist/bot/index.js"]
+```
+
+```bash
+# Build and run
+docker build -t mexc-signal-bot .
+docker run -d \
+  --name mexc-signal-bot \
+  --restart unless-stopped \
+  --env-file .env \
+  -v $(pwd)/bot-state.json:/app/bot-state.json \
+  mexc-signal-bot
+
+# View logs
+docker logs -f mexc-signal-bot
+```
+
+### Go-Live Checklist
+
+Before switching from dry-run to live trading on the server:
+
+- [ ] Bot connects to Telegram and sees channel messages
+- [ ] Signals are parsed correctly (check logs)
+- [ ] Symbols resolve to valid MEXC contracts
+- [ ] Position sizing looks correct in dry-run logs
+- [ ] MEXC connection test passes
+- [ ] `.env` has `DRY_RUN=false` and `TRADING_ENABLED=true`
+- [ ] You have sufficient balance in your MEXC Futures account
+- [ ] You've set a reasonable `MAX_NOTIONAL_PER_TRADE` and `RISK_PERCENT`
+- [ ] Bot auto-restarts on crash (systemd or Docker restart policy)
+
+---
+
+## SDK Usage (Programmatic)
 
 ### REST API
 
 ```typescript
 import { MexcFuturesClient } from "mexc-futures-sdk";
 
+// With API key + secret (recommended)
 const client = new MexcFuturesClient({
-  authToken: "WEB_YOUR_TOKEN_HERE", // Get from browser Developer Tools
+  apiKey: "mx0vglS6XtxqHJsEse",
+  secretKey: "60cbe8535ba6419da3449b6e58c458be",
 });
 
 // Get ticker data
@@ -48,9 +447,9 @@ const order = await client.submitOrder({
   symbol: "BTC_USDT",
   price: 50000,
   vol: 0.001,
-  side: 1, // 1=open long, 3=open short
-  type: 5, // 5=market order
-  openType: 1, // 1=isolated margin
+  side: 1,          // 1=open long, 3=open short
+  type: 5,          // 5=market order
+  openType: 1,      // 1=isolated margin
   leverage: 10,
 });
 ```
@@ -66,17 +465,15 @@ const ws = new MexcFuturesWebSocket({
   autoReconnect: true,
 });
 
-// Connect and login
 ws.on("connected", () => {
   ws.login(false).then(() => {
     console.log("Login successful");
-    ws.subscribeToAll(); // Subscribe to all private data
+    ws.subscribeToAll();
   });
 });
 
-// Handle trading events
 ws.on("orderUpdate", (data) => {
-  console.log("Order Update:", data.orderId, data.symbol, data.state);
+  console.log("Order:", data.orderId, data.symbol, data.state);
 });
 
 ws.on("positionUpdate", (data) => {
@@ -90,368 +487,65 @@ ws.on("assetUpdate", (data) => {
 await ws.connect();
 ```
 
-## Authentication
-
-### REST API - Browser Session Token
-
-1. Login to MEXC futures in your browser
-2. Open Developer Tools (F12) → Network tab
-3. Make any request to futures.mexc.com
-4. Find the `authorization` header (starts with "WEB...")
-5. Copy the token value
-
-### WebSocket - API Keys
-
-1. Go to MEXC API Management
-2. Create API Key and Secret
-3. Enable futures trading permissions
-
-## WebSocket Events
-
-### Private Data Events
-
-| Event            | Description           | Data                                 |
-| ---------------- | --------------------- | ------------------------------------ |
-| `orderUpdate`    | Order status changes  | Order details, state, fills          |
-| `orderDeal`      | Order executions      | Trade details, fees, profit          |
-| `positionUpdate` | Position changes      | Size, PnL, margin, liquidation price |
-| `assetUpdate`    | Balance changes       | Available, frozen, position margin   |
-| `stopOrder`      | Stop-loss/take-profit | Stop prices for positions            |
-| `liquidateRisk`  | Liquidation warnings  | Margin ratio, liquidation price      |
-
-### Public Data Events (Optional)
-
-| Event     | Description         | Data                                  |
-| --------- | ------------------- | ------------------------------------- |
-| `tickers` | All symbol prices   | Price, volume, change for all symbols |
-| `ticker`  | Single symbol price | Real-time price updates               |
-| `depth`   | Order book          | Bids and asks                         |
-| `kline`   | Candlestick data    | OHLCV data                            |
-| `deal`    | Recent trades       | Trade executions                      |
-
-## WebSocket Subscription Options
-
-### Option 1: All Private Data (Recommended)
-
-```typescript
-ws.on("login", () => {
-  ws.subscribeToAll(); // Get all trading events
-});
-```
-
-### Option 2: Filtered by Symbols
-
-```typescript
-ws.on("login", () => {
-  ws.subscribeToMultiple([
-    {
-      filter: "order",
-      rules: ["BTC_USDT", "ETH_USDT"], // Only these symbols
-    },
-    {
-      filter: "position",
-      rules: ["BTC_USDT", "ETH_USDT"],
-    },
-    {
-      filter: "asset", // All balance updates
-    },
-  ]);
-});
-```
-
-### Option 3: Public Market Data
-
-```typescript
-// Subscribe to market data
-ws.subscribeToAllTickers(); // All symbol prices
-ws.subscribeToTicker("BTC_USDT"); // Single symbol
-ws.subscribeToDepth("BTC_USDT"); // Order book
-ws.subscribeToKline("BTC_USDT", "Min1"); // 1-minute candles
-```
-
-## Order Types and Parameters
-
-### Order Sides
-
-- `1` = Open long position
-- `2` = Close short position
-- `3` = Open short position
-- `4` = Close long position
-
-### Order Types
-
-- `1` = Limit order
-- `5` = Market order
-- `3` = IOC (Immediate or Cancel)
-- `4` = FOK (Fill or Kill)
-
-### Order States (WebSocket)
-
-- `1` = New
-- `2` = Pending
-- `3` = Filled
-- `4` = Cancelled
-
-### Example Orders
-
-```typescript
-// Market order
-await client.submitOrder({
-  symbol: "BTC_USDT",
-  price: 50000, // Required even for market orders
-  vol: 0.001,
-  side: 1, // Open long
-  type: 5, // Market
-  openType: 1, // Isolated margin
-  leverage: 10,
-});
-
-// Limit order with stop-loss
-await client.submitOrder({
-  symbol: "BTC_USDT",
-  price: 49000,
-  vol: 0.001,
-  side: 1, // Open long
-  type: 1, // Limit
-  openType: 1, // Isolated margin
-  leverage: 10,
-  stopLossPrice: 45000,
-  takeProfitPrice: 55000,
-});
-
-// Close position
-await client.submitOrder({
-  symbol: "BTC_USDT",
-  price: 51000,
-  vol: 0.001,
-  side: 4, // Close long
-  type: 5, // Market
-  openType: 1,
-  positionId: 12345, // Position to close
-});
-```
-
-## Error Handling
-
-The SDK provides comprehensive error handling with user-friendly error messages and specific error types.
-
-### Error Types
-
-```typescript
-import {
-  MexcAuthenticationError,
-  MexcSignatureError,
-  MexcApiError,
-  MexcNetworkError,
-  MexcValidationError,
-  MexcRateLimitError,
-  MexcFuturesError,
-} from "mexc-futures-sdk";
-```
-
-### Handling Different Error Types
-
-```typescript
-try {
-  const asset = await client.getAccountAsset("USDT");
-  console.log("Success:", asset);
-} catch (error) {
-  if (error instanceof MexcAuthenticationError) {
-    console.log("❌ Authentication failed. Please update your WEB token.");
-  } else if (error instanceof MexcSignatureError) {
-    console.log("❌ Signature verification failed. Get a fresh WEB token.");
-  } else if (error instanceof MexcRateLimitError) {
-    console.log("❌ Rate limit exceeded. Please wait before retrying.");
-    if (error.retryAfter) {
-      console.log(`Retry after ${error.retryAfter} seconds`);
-    }
-  } else if (error instanceof MexcNetworkError) {
-    console.log("❌ Network error. Check your internet connection.");
-  } else if (error instanceof MexcValidationError) {
-    console.log(`❌ Validation error: ${error.message}`);
-  } else if (error instanceof MexcApiError) {
-    console.log(`❌ API error (${error.statusCode}): ${error.message}`);
-  }
-
-  // Get detailed error information for debugging
-  if (error instanceof MexcFuturesError) {
-    console.log("Error details:", error.getDetails());
-  }
-}
-```
-
-### User-Friendly Error Messages
-
-All errors provide user-friendly messages through `getUserFriendlyMessage()`:
-
-```typescript
-try {
-  await client.submitOrder({...});
-} catch (error) {
-  if (error instanceof MexcFuturesError) {
-    console.log(error.getUserFriendlyMessage());
-    // Example: "❌ Authentication failed. Your authorization token may be expired or invalid. Please update your WEB token from browser Developer Tools."
-  }
-}
-```
-
-### Common Error Scenarios
-
-| Error Type                | Common Causes               | Solutions                    |
-| ------------------------- | --------------------------- | ---------------------------- |
-| `MexcAuthenticationError` | Invalid/expired WEB token   | Get fresh token from browser |
-| `MexcSignatureError`      | Token authentication failed | Update WEB token             |
-| `MexcRateLimitError`      | Too many requests           | Wait and retry               |
-| `MexcNetworkError`        | Connection issues           | Check internet connection    |
-| `MexcValidationError`     | Invalid parameters          | Check request parameters     |
-
-### WebSocket Error Handling
-
-```typescript
-ws.on("error", (error) => {
-  console.error("WebSocket error:", error);
-});
-
-ws.on("disconnected", ({ code, reason }) => {
-  console.log("Disconnected:", code, reason);
-});
-```
-
-### Logging Levels
-
-Set `logLevel` to control error verbosity:
-
-```typescript
-const client = new MexcFuturesClient({
-  authToken: "WEB_YOUR_TOKEN",
-  logLevel: "INFO", // "SILENT", "ERROR", "WARN", "INFO", "DEBUG"
-});
-```
-
-- `ERROR`: Only error messages
-- `INFO`: User-friendly error messages
-- `DEBUG`: Detailed error information for debugging
-
-## Complete Example
-
-See `examples/websocket.ts` for a complete working example with:
-
-- Connection management
-- Event handlers for all data types
-- Error handling
-- Graceful shutdown
-
-```bash
-# Run the example
-npm install
-ts-node examples/websocket.ts
-```
-
 ## API Reference
 
 ### REST Methods
 
-- `getTicker(symbol)` - Get ticker data
-- `getContractDetail(symbol?)` - Get contract info
-- `getContractDepth(symbol, limit?)` - Get order book
-- `submitOrder(params)` - Place order
-- `cancelOrder(orderIds)` - Cancel orders
-- `getOrderHistory(params)` - Get order history
-- `getPositionHistory(params)` - Get position history
-- `getAssets()` - Get account balance
+- `getTicker(symbol)` — Get ticker data
+- `getContractDetail(symbol?)` — Get contract info (all or specific)
+- `getContractDepth(symbol, limit?)` — Get order book
+- `submitOrder(params)` — Place an order
+- `cancelOrder(orderIds)` — Cancel orders (up to 50)
+- `cancelOrderByExternalId(params)` — Cancel by external ID
+- `cancelAllOrders(params?)` — Cancel all orders
+- `getOrderHistory(params)` — Get order history
+- `getOrderDeals(params)` — Get order trade details
+- `getOrder(orderId)` — Get single order by ID
+- `getOrderByExternalId(symbol, externalOid)` — Get order by external ID
+- `getRiskLimit()` — Get account risk limits
+- `getFeeRate()` — Get fee rates
+- `getAccountAsset(currency)` — Get balance for a currency
+- `getOpenPositions(symbol?)` — Get current positions
+- `getPositionHistory(params)` — Get historical positions
+- `testConnection()` — Test API connectivity
 
-### WebSocket Methods
+### Order Parameters
 
-- `connect()` - Connect to WebSocket
-- `login(subscribe?)` - Login and optionally auto-subscribe
-- `subscribeToAll()` - Subscribe to all private data
-- `subscribeToMultiple(filters)` - Subscribe with filters
-- `subscribeToTicker(symbol)` - Market data subscriptions
-- `disconnect()` - Close connection
-
-## 🤖 Telegram Signal Bot
-
-The SDK includes a built-in Telegram signal bot that listens for trading signals on configured channels and automatically executes trades on MEXC Futures.
-
-### Signal Formats
-
-The bot recognizes these signal formats:
-
-```
-BUY TAOUSDT@187.54 SL 185.13 TP 188.81
-SELL BTCUSDT@65000 SL 66000 TP 63000
-BUY ETHUSDT@3500 SL 3400 TP1 3600 TP2 3700 TP3 3800
-BUY SOLUSDT@150 SL 145
-```
-
-- **BUY** = open long, **SELL** = open short
-- **SL** = stop-loss price (mandatory)
-- **TP** = take-profit (optional — defaults to 1.5× risk distance)
-- Multiple TPs (TP1, TP2, TP3) split volume equally across targets
-- Symbols are normalized: `TAOUSDT` → `TAO_USDT`
-
-### Quick Start
-
-1. Copy `.env.example` to `.env` and fill in your credentials
-2. Start in dry-run mode first:
-
-```bash
-# Development
-npm run bot
-
-# Production
-npm run build
-npm run bot:start
-```
-
-### Configuration
-
-All settings come from environment variables (see `.env.example`):
-
-| Variable | Default | Description |
+| Param | Values | Description |
 |---|---|---|
-| `MEXC_AUTH_TOKEN` | — | WEB auth token from browser |
-| `TELEGRAM_BOT_TOKEN` | — | Bot API token from @BotFather |
-| `ALLOWED_CHANNELS` | — | Comma-separated channel/chat IDs |
-| `DEFAULT_LEVERAGE` | `10` | Default leverage (1–200) |
-| `OPEN_TYPE` | `1` | 1 = isolated, 2 = cross |
-| `RISK_PERCENT` | `0.01` | Risk per trade (0.01 = 1% of equity) |
-| `DEFAULT_TP_RATIO` | `1.5` | TP:SL ratio when no TP given |
-| `MAX_CONCURRENT_TRADES` | `5` | Max open positions |
-| `MAX_NOTIONAL_PER_TRADE` | `10000` | Max notional per trade (USDT) |
-| `DRY_RUN` | `true` | Parse/size but don't submit orders |
-| `TRADING_ENABLED` | `true` | Master trading switch |
+| `side` | `1`=long, `2`=close short, `3`=short, `4`=close long | Order direction |
+| `type` | `1`=limit, `3`=IOC, `4`=FOK, `5`=market | Order type |
+| `openType` | `1`=isolated, `2`=cross | Margin mode |
 
-### Linux Deployment
+### WebSocket Events
 
-A systemd service file is provided in `deploy/mexc-signal-bot.service`:
+| Event | Description |
+|---|---|
+| `orderUpdate` | Order status changes |
+| `orderDeal` | Trade executions |
+| `positionUpdate` | Position changes (PnL, margin, liquidation) |
+| `assetUpdate` | Balance updates |
+| `stopOrder` | Stop-loss / take-profit triggers |
+| `tickers` | All symbol prices |
+| `depth` | Order book updates |
+| `kline` | Candlestick data |
 
-```bash
-# Create service user
-sudo useradd -r -s /bin/false mexcbot
+## Safety Features
 
-# Deploy
-sudo cp -r . /opt/mexc-signal-bot
-sudo cp deploy/mexc-signal-bot.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now mexc-signal-bot
-
-# View logs
-sudo journalctl -u mexc-signal-bot -f
-```
-
-### Safety Features
-
-- **Dry-run mode** — verify parsing and sizing without submitting orders
-- **Idempotency** — duplicate signals are never executed twice
-- **Position limits** — configurable max concurrent trades
-- **Notional cap** — max USDT value per trade
-- **Symbol validation** — only trades on active, API-allowed MEXC contracts
-- **Risk-based sizing** — automatically calculates volume from equity and stop distance
+- **Dry-run mode** — Verify parsing and sizing without submitting orders
+- **Idempotency** — `bot-state.json` tracks processed message IDs; duplicate signals are never executed twice
+- **Position limits** — `MAX_CONCURRENT_TRADES` caps open positions
+- **Notional cap** — `MAX_NOTIONAL_PER_TRADE` limits USDT value per trade
+- **Symbol validation** — Only trades active, API-allowed MEXC contracts
+- **Risk-based sizing** — Volume calculated from equity, stop distance, and `RISK_PERCENT`
+- **Trading switch** — `TRADING_ENABLED=false` disables all order submission
+- **Contract refresh** — Caches MEXC contract list (5 min TTL)
 
 ## Support
 
 This is an unofficial SDK. Use at your own risk. For issues and feature requests, please open a GitHub issue.
+
+[Join the Discord](https://discord.gg/bZeQd4rMW9) | [Telegram Contact](https://t.me/yobebka)
 
 ## License
 
