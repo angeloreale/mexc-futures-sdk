@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { MexcFuturesSDK } from "../client";
 import { SubmitOrderRequest, SubmitOrderResponse } from "../types/orders";
 import { BotConfig, ResolvedTrade, TradeRecord } from "./types";
@@ -106,8 +107,11 @@ export class TradeExecutor {
     volume: number,
     takeProfitPrice: number
   ): Promise<TradeRecord> {
-    // Generate a unique external order ID for idempotency
-    const externalOid = `tg_${trade.signal.chatId || "unknown"}_${trade.signal.messageId || Date.now()}_tp${takeProfitPrice}_v${volume}`;
+    // Generate a unique external order ID for idempotency (≤ 32 chars per MEXC limit).
+    // Use a short MD5 hash of the trade identity fields to stay deterministic and compact.
+    const rawId = `${trade.signal.chatId || 0}_${trade.signal.messageId || 0}_${takeProfitPrice}_${volume}`;
+    const hash = crypto.createHash("md5").update(rawId).digest("hex").substring(0, 16);
+    const externalOid = `tg_${hash}`;
 
     const orderParams: SubmitOrderRequest = {
       symbol: trade.mexcSymbol,
