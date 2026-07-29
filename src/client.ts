@@ -19,6 +19,8 @@ import {
   CancelAllOrdersResponse,
   SubmitOrderRequest,
   SubmitOrderResponse,
+  SubmitTriggerOrderRequest,
+  SubmitTriggerOrderResponse,
   GetOrderResponse,
 } from "./types/orders";
 import {
@@ -228,6 +230,70 @@ export class MexcFuturesSDK {
       return response.data;
     } catch (error) {
       // Error is already logged by the interceptor with user-friendly message
+      throw error;
+    }
+  }
+
+  /**
+   * Submit a trigger (stop-entry) order using /api/v1/private/order/trigger/submit.
+   * Used when a signal specifies an explicit entry price (@ or EP).
+   * The order stays pending until the market price reaches triggerPrice.
+   */
+  async submitTriggerOrder(
+    params: SubmitTriggerOrderRequest
+  ): Promise<SubmitTriggerOrderResponse> {
+    try {
+      const p = params;
+      if (!p || typeof p.symbol !== "string" || p.symbol.length === 0) {
+        throw new MexcValidationError("symbol is required", "symbol");
+      }
+      if (!Number.isFinite(p.triggerPrice) || p.triggerPrice <= 0) {
+        throw new MexcValidationError("triggerPrice must be a finite number > 0", "triggerPrice");
+      }
+      if (!Number.isFinite(p.price) || p.price < 0) {
+        throw new MexcValidationError("price must be a finite number >= 0", "price");
+      }
+      if (!Number.isFinite(p.vol) || p.vol <= 0) {
+        throw new MexcValidationError("vol must be a finite number > 0", "vol");
+      }
+      if (![1, 2, 3, 4].includes(p.side as number)) {
+        throw new MexcValidationError("side must be one of 1,2,3,4", "side");
+      }
+      if (![1, 5].includes(p.type as number)) {
+        throw new MexcValidationError("trigger type must be 1 (limit) or 5 (market)", "type");
+      }
+      if (![1, 2].includes(p.openType as number)) {
+        throw new MexcValidationError("openType must be 1 (isolated) or 2 (cross)", "openType");
+      }
+      if (![1, 2].includes(p.triggerType as number)) {
+        throw new MexcValidationError("triggerType must be 1 (latest price) or 2 (mark price)", "triggerType");
+      }
+      if (p.leverage !== undefined && (!Number.isFinite(p.leverage) || p.leverage <= 0)) {
+        throw new MexcValidationError("leverage must be a finite number > 0", "leverage");
+      }
+
+      this.logger.info("🚀 Submitting trigger order using /trigger/submit endpoint");
+
+      this.logger.debug(
+        "📦 Trigger order parameters:",
+        JSON.stringify(params, null, 2)
+      );
+
+      const headers = generateHeaders(
+        this.getAuthOptions(),
+        true,
+        params
+      );
+
+      const response = await this.httpClient.post(
+        ENDPOINTS.SUBMIT_TRIGGER_ORDER,
+        params,
+        { headers }
+      );
+
+      this.logger.debug("🔍 Trigger order response:", response.data);
+      return response.data;
+    } catch (error) {
       throw error;
     }
   }

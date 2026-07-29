@@ -118,6 +118,34 @@ export interface SubmitOrderResponse {
   data?: string | number; // Order ID — large ids exceed 2^53 and are returned as exact strings; use String(data)
 }
 
+// ── Trigger Order (Stop Entry) ────────────────────────────────────
+// MEXC endpoint: POST /api/v1/private/order/trigger/submit
+// Used when a signal specifies an explicit entry price (@ or EP).
+// The order is placed as a pending trigger; it executes (market or limit)
+// only when the market price reaches triggerPrice.
+
+export interface SubmitTriggerOrderRequest {
+  symbol: string;
+  triggerType: 1 | 2; // 1=latest price trigger, 2=mark price trigger
+  triggerPrice: number; // price that triggers the order
+  price: number; // execution price (0 = market execution on trigger)
+  vol: number;
+  side: 1 | 2 | 3 | 4; // 1=open long, 2=close short, 3=open short, 4=close long
+  type: 1 | 5; // execution type after trigger: 1=limit, 5=market
+  openType: 1 | 2; // 1=isolated, 2=cross
+  leverage?: number;
+  stopLossPrice?: number;
+  takeProfitPrice?: number;
+  externalOid?: string;
+}
+
+export interface SubmitTriggerOrderResponse {
+  success: boolean;
+  code: number;
+  message?: string;
+  data?: string | number;
+}
+
 // Get order by ID types
 export interface GetOrderResponse {
   success: boolean;

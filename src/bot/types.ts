@@ -8,12 +8,14 @@ export interface TradeSignal {
   action: "BUY" | "SELL";
   /** Symbol as it appeared in the message (e.g. "TAOUSDT") */
   rawSymbol: string;
-  /** Entry price from the signal */
+  /** Entry price from the signal; 0 means market entry (resolved later via ticker) */
   entry: number;
   /** Stop-loss price */
   sl: number;
   /** Take-profit price(s); at least one is always present after normalization */
   tp: number[];
+  /** Order type: "market" when no @/EP given, "trigger" when explicit entry provided */
+  orderType: "market" | "trigger";
   /** Telegram message ID for idempotency */
   messageId?: number;
   /** Telegram channel/chat ID */

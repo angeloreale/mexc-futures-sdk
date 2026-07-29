@@ -3,6 +3,7 @@ export const API_BASE_URL = "https://futures.mexc.com/api/v1";
 export const ENDPOINTS = {
   // Private endpoints (require authentication)
   SUBMIT_ORDER: "/private/order/submit",
+  SUBMIT_TRIGGER_ORDER: "/private/order/trigger/submit",
   CANCEL_ORDER: "/private/order/cancel",
   CANCEL_ORDER_BY_EXTERNAL_ID: "/private/order/cancel_with_external",
   CANCEL_ALL_ORDERS: "/private/order/cancel_all",

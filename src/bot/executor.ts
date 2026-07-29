@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { MexcFuturesSDK } from "../client";
-import { SubmitOrderRequest, SubmitOrderResponse } from "../types/orders";
+import { SubmitOrderRequest, SubmitTriggerOrderRequest, SubmitOrderResponse, SubmitTriggerOrderResponse } from "../types/orders";
 import { BotConfig, ResolvedTrade, TradeRecord } from "./types";
 import { Logger } from "../utils/logger";
 
@@ -20,18 +20,19 @@ export class TradeExecutor {
 
   /**
    * Execute a single resolved trade.
+   * Routes to market or trigger order based on signal.orderType.
    * If multiple TP targets exist, splits volume equally across them.
    */
   async execute(trade: ResolvedTrade): Promise<TradeRecord[]> {
-    const records: TradeRecord[] = [];
-
+    // Dry-run / disabled checks
     if (this.config.dryRun) {
-      this.logger.info(`🧪 [DRY RUN] Would submit order:`);
+      const orderTypeLabel = trade.signal.orderType === "trigger" ? "TRIGGER" : "MARKET";
+      this.logger.info(`🧪 [DRY RUN] Would submit ${orderTypeLabel} order:`);
       this.logger.info(
         `   Symbol: ${trade.mexcSymbol}, Side: ${trade.side === 1 ? "LONG" : "SHORT"}`
       );
       this.logger.info(
-        `   Volume: ${trade.volume}, Entry: ${trade.entry}, SL: ${trade.stopLossPrice}`
+        `   Volume: ${trade.volume}, Entry/Trigger: ${trade.entry}, SL: ${trade.stopLossPrice}`
       );
       this.logger.info(`   TP targets: ${trade.allTpTargets.join(", ")}`);
       this.logger.info(
@@ -41,47 +42,73 @@ export class TradeExecutor {
         `   Risk: ${trade.riskAmount.toFixed(2)} USDT (${(this.config.riskPercent * 100).toFixed(1)}% of ${trade.equity.toFixed(2)})`
       );
 
-      records.push({
+      const record: TradeRecord = {
         resolved: trade,
         orderId: "DRY_RUN",
         success: true,
         executedAt: Date.now(),
-      });
-      this.logTradeRecord(records[records.length - 1]);
-      return records;
+      };
+      this.logTradeRecord(record);
+      return [record];
     }
 
     if (!this.config.tradingEnabled) {
       this.logger.warn("⚠️ Trading is disabled — skipping execution");
-      records.push({
+      const record: TradeRecord = {
         resolved: trade,
         orderId: "DISABLED",
         success: false,
         error: "Trading disabled",
         executedAt: Date.now(),
-      });
-      this.logTradeRecord(records[records.length - 1]);
-      return records;
+      };
+      this.logTradeRecord(record);
+      return [record];
     }
 
-    // If single TP or only one TP target, submit one order with full volume
+    // Route to the appropriate execution method
+    if (trade.signal.orderType === "trigger") {
+      return this.executeTrigger(trade);
+    }
+    return this.executeMarket(trade);
+  }
+
+  /**
+   * Execute a market order (immediate fill, no @/EP in signal).
+   */
+  private async executeMarket(trade: ResolvedTrade): Promise<TradeRecord[]> {
+    return this.splitAndSubmit(trade, false);
+  }
+
+  /**
+   * Execute a trigger (stop-entry) order (signal had @ or EP).
+   * Places pending trigger orders that fire when price reaches entry.
+   */
+  private async executeTrigger(trade: ResolvedTrade): Promise<TradeRecord[]> {
+    return this.splitAndSubmit(trade, true);
+  }
+
+  /**
+   * Shared split-and-submit logic for both market and trigger orders.
+   * Splits volume across multiple TP targets if needed.
+   */
+  private async splitAndSubmit(trade: ResolvedTrade, isTrigger: boolean): Promise<TradeRecord[]> {
+    const records: TradeRecord[] = [];
+
     if (trade.allTpTargets.length <= 1) {
-      const record = await this.submitSingleOrder(trade, trade.volume, trade.takeProfitPrice);
+      const record = await this.submitSingleOrder(trade, trade.volume, trade.takeProfitPrice, isTrigger);
       records.push(record);
       this.logTradeRecord(record);
       return records;
     }
 
     // Multiple TP targets: split volume equally, respecting contract precision.
-    // Only split across as many targets as can hold at least minVol each.
     const { minVol, volScale, volUnit } = trade;
     const maxSplits = Math.floor(trade.volume / minVol);
     if (maxSplits < 2) {
-      // Not enough volume to split — submit as a single order with the first TP
       this.logger.info(
         `📎 Volume ${trade.volume} too small to split across ${trade.allTpTargets.length} TPs (minVol=${minVol}) — using single TP=${trade.takeProfitPrice}`
       );
-      const record = await this.submitSingleOrder(trade, trade.volume, trade.takeProfitPrice);
+      const record = await this.submitSingleOrder(trade, trade.volume, trade.takeProfitPrice, isTrigger);
       records.push(record);
       this.logTradeRecord(record);
       return records;
@@ -94,7 +121,6 @@ export class TradeExecutor {
       );
     }
 
-    // Round helper using contract volScale
     const roundVol = (v: number): number => {
       const stepped = Math.floor(v / volUnit) * volUnit;
       if (volScale > 0) {
@@ -106,8 +132,6 @@ export class TradeExecutor {
 
     const rawPerTarget = trade.volume / targetCount;
     const volPerTarget = roundVol(rawPerTarget);
-
-    // Give remainder to the first target
     const used = volPerTarget * targetCount;
     const remainder = roundVol(trade.volume - used);
 
@@ -116,11 +140,10 @@ export class TradeExecutor {
       if (vol < minVol) continue;
 
       const tp = trade.allTpTargets[i];
-      const record = await this.submitSingleOrder(trade, vol, tp);
+      const record = await this.submitSingleOrder(trade, vol, tp, isTrigger);
       records.push(record);
       this.logTradeRecord(record);
 
-      // If the first order fails, don't continue
       if (!record.success) {
         this.logger.error(
           `❌ Order ${i + 1}/${targetCount} failed — aborting remaining splits`
@@ -132,17 +155,34 @@ export class TradeExecutor {
     return records;
   }
 
+  /**
+   * Submit a single order — either market or trigger depending on isTrigger.
+   */
   private async submitSingleOrder(
     trade: ResolvedTrade,
     volume: number,
-    takeProfitPrice: number
+    takeProfitPrice: number,
+    isTrigger: boolean
   ): Promise<TradeRecord> {
-    // Generate a unique external order ID for idempotency (≤ 32 chars per MEXC limit).
-    // Use a short MD5 hash of the trade identity fields to stay deterministic and compact.
     const rawId = `${trade.signal.chatId || 0}_${trade.signal.messageId || 0}_${takeProfitPrice}_${volume}`;
     const hash = crypto.createHash("md5").update(rawId).digest("hex").substring(0, 16);
     const externalOid = `tg_${hash}`;
 
+    if (isTrigger) {
+      return this.submitTriggerOrder(trade, volume, takeProfitPrice, externalOid);
+    }
+    return this.submitMarketOrder(trade, volume, takeProfitPrice, externalOid);
+  }
+
+  /**
+   * Submit a regular market order.
+   */
+  private async submitMarketOrder(
+    trade: ResolvedTrade,
+    volume: number,
+    takeProfitPrice: number,
+    externalOid: string
+  ): Promise<TradeRecord> {
     const orderParams: SubmitOrderRequest = {
       symbol: trade.mexcSymbol,
       price: trade.entry,
@@ -157,45 +197,100 @@ export class TradeExecutor {
     };
 
     this.logger.info(
-      `🚀 Submitting order: ${trade.mexcSymbol} ${trade.side === 1 ? "LONG" : "SHORT"} vol=${volume} entry=${trade.entry} SL=${trade.stopLossPrice} TP=${takeProfitPrice}`
+      `🚀 Market order: ${trade.mexcSymbol} ${trade.side === 1 ? "LONG" : "SHORT"} vol=${volume} SL=${trade.stopLossPrice} TP=${takeProfitPrice}`
     );
 
     try {
-      const response: SubmitOrderResponse =
-        await this.client.submitOrder(orderParams);
-
-      if (response.success) {
-        const orderId = String(response.data || "unknown");
-        this.logger.info(`✅ Order placed: ${orderId}`);
-        return {
-          resolved: trade,
-          orderId,
-          success: true,
-          executedAt: Date.now(),
-        };
-      } else {
-        const errorMsg = response.message || `Code ${response.code}`;
-        this.logger.error(`❌ Order rejected: ${errorMsg}`);
-        return {
-          resolved: trade,
-          orderId: "",
-          success: false,
-          error: errorMsg,
-          executedAt: Date.now(),
-        };
-      }
+      const response: SubmitOrderResponse = await this.client.submitOrder(orderParams);
+      return this.toTradeRecord(trade, response, volume, takeProfitPrice);
     } catch (error) {
-      const errorMsg =
-        error instanceof Error ? error.message : String(error);
-      this.logger.error(`❌ Order submission failed: ${errorMsg}`);
+      return this.toErrorRecord(trade, error, volume, takeProfitPrice);
+    }
+  }
+
+  /**
+   * Submit a trigger (stop-entry) order.
+   * The order stays pending until market price reaches triggerPrice (trade.entry).
+   * On trigger, executes as a market order (type=5, price=0).
+   */
+  private async submitTriggerOrder(
+    trade: ResolvedTrade,
+    volume: number,
+    takeProfitPrice: number,
+    externalOid: string
+  ): Promise<TradeRecord> {
+    const orderParams: SubmitTriggerOrderRequest = {
+      symbol: trade.mexcSymbol,
+      triggerType: 1, // latest price trigger
+      triggerPrice: trade.entry,
+      price: 0, // market execution on trigger
+      vol: volume,
+      side: trade.side,
+      type: 5, // market execution on trigger
+      openType: trade.openType,
+      leverage: trade.leverage,
+      stopLossPrice: trade.stopLossPrice,
+      takeProfitPrice: takeProfitPrice,
+      externalOid,
+    };
+
+    this.logger.info(
+      `🔔 Trigger order: ${trade.mexcSymbol} ${trade.side === 1 ? "LONG" : "SHORT"} trigger=${trade.entry} vol=${volume} SL=${trade.stopLossPrice} TP=${takeProfitPrice}`
+    );
+
+    try {
+      const response: SubmitTriggerOrderResponse =
+        await this.client.submitTriggerOrder(orderParams);
+      return this.toTradeRecord(trade, response, volume, takeProfitPrice);
+    } catch (error) {
+      return this.toErrorRecord(trade, error, volume, takeProfitPrice);
+    }
+  }
+
+  /** Convert a successful/failed API response to a TradeRecord. */
+  private toTradeRecord(
+    trade: ResolvedTrade,
+    response: SubmitOrderResponse | SubmitTriggerOrderResponse,
+    volume: number,
+    takeProfitPrice: number
+  ): TradeRecord {
+    if (response.success) {
+      const orderId = String(response.data || "unknown");
+      this.logger.info(`✅ Order placed: ${orderId}`);
       return {
         resolved: trade,
-        orderId: "",
-        success: false,
-        error: errorMsg,
+        orderId,
+        success: true,
         executedAt: Date.now(),
       };
     }
+    const errorMsg = response.message || `Code ${response.code}`;
+    this.logger.error(`❌ Order rejected: ${errorMsg}`);
+    return {
+      resolved: trade,
+      orderId: "",
+      success: false,
+      error: errorMsg,
+      executedAt: Date.now(),
+    };
+  }
+
+  /** Convert a thrown error to a TradeRecord. */
+  private toErrorRecord(
+    trade: ResolvedTrade,
+    error: unknown,
+    volume: number,
+    takeProfitPrice: number
+  ): TradeRecord {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    this.logger.error(`❌ Order submission failed: ${errorMsg}`);
+    return {
+      resolved: trade,
+      orderId: "",
+      success: false,
+      error: errorMsg,
+      executedAt: Date.now(),
+    };
   }
 
   /** Persist a trade record to the trades log file. */
