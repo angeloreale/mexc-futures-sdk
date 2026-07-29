@@ -49,7 +49,7 @@ export function parseSignal(
   const cleaned = text.replace(/\s+/g, " ").trim();
 
   // Normalize "EP 460" → "@460" so both EP and @ formats work with the same regex
-  const epNormalized = cleaned.replace(/\bEP\s+(\d+(?:\.\d+)?)\b/i, "@$1");
+  const epNormalized = cleaned.replace(/\s+EP\s+(\d+(?:\.\d+)?)\b/i, "@$1");
 
   // Try @price regex first
   let match = epNormalized.match(SIGNAL_REGEX);
