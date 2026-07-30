@@ -318,6 +318,11 @@ export class SignalBot {
     }
 
     // 5. Calculate position size
+    // Compute effective risk % BEFORE the sizer so we can log it even on failure
+    const effectiveRiskPct = signal.riskPercentOverride !== undefined
+      ? signal.riskPercentOverride
+      : this.config.riskPercent * 100;
+
     const resolvedTrade = calculatePositionSize(
       signal,
       contract,
@@ -328,7 +333,7 @@ export class SignalBot {
     if (!resolvedTrade) {
       // The sizer already logged a specific reason (stop distance, minVol, notional, etc.)
       this.logger.warn(
-        `⚠️ Position sizing failed for ${mexcSymbol} (equity=${equity.toFixed(2)}, risk=${(this.config.riskPercent * 100).toFixed(1)}%) — skipping trade`
+        `⚠️ Position sizing failed for ${mexcSymbol} (equity=${equity.toFixed(2)}, risk=${effectiveRiskPct.toFixed(2)}%) — skipping trade`
       );
       return;
     }
