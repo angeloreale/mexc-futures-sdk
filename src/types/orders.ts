@@ -146,6 +146,49 @@ export interface SubmitTriggerOrderResponse {
   data?: string | number;
 }
 
+// ── Plan Order (Stop / Conditional Entry) ─────────────────────────
+// MEXC endpoint: POST /api/v1/private/planorder/place/v2
+// Used when a signal specifies an explicit entry price (@ or EP).
+// The order is placed as a pending plan (stop/conditional); it executes
+// only when the market price crosses the triggerPrice in the specified
+// direction.
+//
+// triggerType:
+//   1 = price >= triggerPrice  (buy stop  — triggers when price rises to EP)
+//   2 = price <= triggerPrice  (sell stop — triggers when price falls to EP)
+//
+// executeCycle: 1 = 24 hours, 2 = 7 days
+// trend: 1 = latest price, 2 = fair price, 3 = index price
+
+export interface SubmitPlanOrderRequest {
+  symbol: string;
+  triggerPrice: number;
+  triggerType: 1 | 2; // 1=price >= triggerPrice, 2=price <= triggerPrice
+  orderType: 1 | 2 | 3 | 4 | 5; // 1=limit, 2=Post Only, 3=IOC, 4=FOK, 5=market
+  executeCycle: 1 | 2; // 1=24 hours, 2=7 days
+  trend: 1 | 2 | 3; // 1=latest price, 2=fair price, 3=index price
+  price?: number; // execution price (not required for market orderType=5)
+  vol: number;
+  leverage: number;
+  side: 1 | 2 | 3 | 4; // 1=open long, 2=close short, 3=open short, 4=close long
+  openType: 1 | 2; // 1=isolated, 2=cross
+  stopLossPrice?: number;
+  takeProfitPrice?: number;
+  externalOid?: string;
+  positionMode?: 1 | 2;
+  lossTrend?: 1 | 2 | 3;
+  profitTrend?: 1 | 2 | 3;
+  priceProtect?: 0 | 1;
+  reduceOnly?: boolean;
+}
+
+export interface SubmitPlanOrderResponse {
+  success: boolean;
+  code: number;
+  message?: string;
+  data?: string | number;
+}
+
 // Get order by ID types
 export interface GetOrderResponse {
   success: boolean;
