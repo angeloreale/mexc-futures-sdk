@@ -1,4 +1,4 @@
-import { parseSignal, normalizeSymbol } from "../parser";
+import { parseSignal, parseSignals, normalizeSymbol } from "../parser";
 
 describe("parseSignal", () => {
   it("parses a BUY signal with single TP", () => {
@@ -234,5 +234,145 @@ describe("normalizeSymbol", () => {
   it("returns null for symbol that IS the quote currency", () => {
     // "USDT" alone — base would be empty
     expect(normalizeSymbol("USDT")).toBeNull();
+  });
+});
+
+// ── parseSignals – multi-line ────────────────────────────────────────────
+
+describe("parseSignals", () => {
+  it("parses multiple signals from a multi-line message", () => {
+    const text = [
+      "SELL TAOUSDT@190.08 SL 198.84 TP1 188.89 TP2 188.25 TP 188.07",
+      "BUY USDCNH@6.77059 SL 6.76867 TP1 6.7714 TP2 6.7727 TP3 6.7744",
+      "BUY BNBUSDT@571.22 SL 569.68 TP1 571.49 TP2 572.21 TP3 573.32",
+    ].join("\n");
+
+    const signals = parseSignals(text);
+    expect(signals).toHaveLength(3);
+
+    expect(signals[0].action).toBe("SELL");
+    expect(signals[0].rawSymbol).toBe("TAOUSDT");
+    expect(signals[0].entry).toBe(190.08);
+    expect(signals[0].tp).toEqual([188.89, 188.25, 188.07]);
+
+    expect(signals[1].action).toBe("BUY");
+    expect(signals[1].rawSymbol).toBe("USDCNH");
+    expect(signals[1].entry).toBe(6.77059);
+    expect(signals[1].tp).toEqual([6.7714, 6.7727, 6.7744]);
+
+    expect(signals[2].action).toBe("BUY");
+    expect(signals[2].rawSymbol).toBe("BNBUSDT");
+    expect(signals[2].entry).toBe(571.22);
+    expect(signals[2].tp).toEqual([571.49, 572.21, 573.32]);
+  });
+
+  it("returns a single signal when the message has one line", () => {
+    const signals = parseSignals("BUY ETHUSDT@3500 SL 3400 TP 3600");
+    expect(signals).toHaveLength(1);
+    expect(signals[0].action).toBe("BUY");
+  });
+
+  it("skips non-signal lines and returns only valid ones", () => {
+    const text = [
+      "SELL BTCUSDT@65000 SL 66000 TP 63000",
+      "Hello, how are you?",
+      "BUY ETHUSDT@3500 SL 3400 TP 3600",
+    ].join("\n");
+
+    const signals = parseSignals(text);
+    expect(signals).toHaveLength(2);
+    expect(signals[0].rawSymbol).toBe("BTCUSDT");
+    expect(signals[1].rawSymbol).toBe("ETHUSDT");
+  });
+
+  it("returns empty array for non-signal text", () => {
+    expect(parseSignals("Hello, how are you?")).toHaveLength(0);
+    expect(parseSignals("")).toHaveLength(0);
+  });
+
+  it("returns empty array for null/undefined input", () => {
+    expect(parseSignals(null as any)).toHaveLength(0);
+    expect(parseSignals(undefined as any)).toHaveLength(0);
+  });
+
+  it("propagates messageId and chatId to every signal", () => {
+    const text = [
+      "SELL BTCUSDT@65000 SL 66000 TP 63000",
+      "BUY ETHUSDT@3500 SL 3400 TP 3600",
+    ].join("\n");
+
+    const signals = parseSignals(text, 999, -100456, 1700000000);
+    expect(signals).toHaveLength(2);
+    expect(signals[0].messageId).toBe(999);
+    expect(signals[0].chatId).toBe(-100456);
+    expect(signals[0].timestamp).toBe(1700000000);
+    expect(signals[1].messageId).toBe(999);
+    expect(signals[1].chatId).toBe(-100456);
+    expect(signals[1].timestamp).toBe(1700000000);
+  });
+});
+
+// ── Risk override ────────────────────────────────────────────────────────
+
+describe("parseSignal risk override", () => {
+  it("parses R2.5 as 2.5% risk", () => {
+    const result = parseSignal("BUY BTCUSDT@65000 SL 64000 TP 66000 R2.5");
+    expect(result).not.toBeNull();
+    expect(result!.riskPercentOverride).toBe(2.5);
+  });
+
+  it("parses R6 as 6% risk", () => {
+    const result = parseSignal("BUY BTCUSDT@65000 SL 64000 TP 66000 R6");
+    expect(result).not.toBeNull();
+    expect(result!.riskPercentOverride).toBe(6);
+  });
+
+  it("parses R0 as 0% risk", () => {
+    const result = parseSignal("BUY BTCUSDT@65000 SL 64000 TP 66000 R0");
+    expect(result).not.toBeNull();
+    expect(result!.riskPercentOverride).toBe(0);
+  });
+
+  it("parses R1.5 as 1.5% risk with multiple TPs", () => {
+    const result = parseSignal(
+      "SELL BTCUSDT@65000 SL 66000 TP1 64000 TP2 63000 R1.5"
+    );
+    expect(result).not.toBeNull();
+    expect(result!.riskPercentOverride).toBe(1.5);
+    expect(result!.tp).toEqual([64000, 63000]);
+  });
+
+  it("parses R3 as 3% risk on market entry", () => {
+    const result = parseSignal("BUY BTCUSDT SL 50000 TP 52000 R3");
+    expect(result).not.toBeNull();
+    expect(result!.riskPercentOverride).toBe(3);
+    expect(result!.entry).toBe(0); // market entry
+  });
+
+  it("ignores R values out of range (>6)", () => {
+    const result = parseSignal("BUY BTCUSDT@65000 SL 64000 TP 66000 R7");
+    expect(result).not.toBeNull();
+    expect(result!.riskPercentOverride).toBeUndefined();
+  });
+
+  it("ignores R values out of range (<0)", () => {
+    const result = parseSignal("BUY BTCUSDT@65000 SL 64000 TP 66000 R-1");
+    expect(result).not.toBeNull();
+    expect(result!.riskPercentOverride).toBeUndefined();
+  });
+
+  it("has no riskPercentOverride when no R marker present", () => {
+    const result = parseSignal("BUY BTCUSDT@65000 SL 64000 TP 66000");
+    expect(result).not.toBeNull();
+    expect(result!.riskPercentOverride).toBeUndefined();
+  });
+
+  it("parses R marker at the end with market entry and multiple TPs", () => {
+    const result = parseSignal(
+      "BUY ZECUSDT SL 459.41 TP1 467.72 TP2 468.80 TP3 471.42 R4"
+    );
+    expect(result).not.toBeNull();
+    expect(result!.riskPercentOverride).toBe(4);
+    expect(result!.tp).toEqual([467.72, 468.80, 471.42]);
   });
 });

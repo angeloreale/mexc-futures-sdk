@@ -4,6 +4,7 @@ import { generateHeaders } from "./utils/headers";
 import { Logger, LogLevelString } from "./utils/logger";
 import {
   MexcValidationError,
+  MexcApiError,
   parseAxiosError,
   formatErrorForLogging,
 } from "./utils/errors";
@@ -85,9 +86,11 @@ export class MexcFuturesSDK {
     }
 
     this.httpClient = axios.create({
-      baseURL: config.baseURL || "https://futures.mexc.com/api/v1",
+      baseURL: config.baseURL || "https://api.mexc.com/api/v1",
       timeout: config.timeout || 30000,
-      headers: generateHeaders(this.getAuthOptions()),
+      // Note: auth headers (ApiKey/Request-Time/Signature) are NOT set here — they are
+      // injected fresh by the request interceptor below so every request carries a current
+      // timestamp and valid signature.
       // Parse responses with a big-int-safe JSON parser. MEXC order ids exceed
       // Number.MAX_SAFE_INTEGER (e.g. 817027833053397504), and the default JSON.parse
       // silently corrupts them (…397504 -> …397500). JSONBigInt preserves them as BigInt
@@ -103,46 +106,119 @@ export class MexcFuturesSDK {
       ],
     });
 
-    // Request interceptor for debugging
+    // Request interceptor — inject fresh auth headers, start timer & log outgoing request
     this.httpClient.interceptors.request.use((requestConfig) => {
-      this.logger.debug(
-        `🌐 ${requestConfig.method?.toUpperCase()} ${requestConfig.baseURL}${
-          requestConfig.url
-        }`
-      );
-      if (requestConfig.data) {
-        this.logger.debug(
-          "📦 Request body:",
-          JSON.stringify(requestConfig.data, null, 2)
-        );
+      // Attach start time so the response interceptor can compute duration
+      (requestConfig as any)._startTime = Date.now();
+
+      const method = (requestConfig.method ?? "GET").toUpperCase();
+
+      // ── Fresh auth headers for EVERY request ──────────────────────────
+      // Previously the axios constructor set `headers: generateHeaders(...)` once, which
+      // captured a stale timestamp+signature. Private GET endpoints (getAccountAsset,
+      // getOpenPositions, etc.) relied on those stale defaults, causing MEXC to reject
+      // them with code 513 (rate-limit / invalid signature).
+      // Now we generate fresh headers right before each request. The body (requestConfig.data)
+      // is passed so POST requests are body-signed; GET requests get timestamp-only signing.
+      const bodyForSigning =
+        requestConfig.data && typeof requestConfig.data === "string"
+          ? requestConfig.data
+          : requestConfig.data;
+      const freshHeaders = generateHeaders(this.getAuthOptions(), true, bodyForSigning);
+      Object.assign(requestConfig.headers, freshHeaders);
+
+      const url = `${requestConfig.baseURL ?? ""}${requestConfig.url ?? ""}`;
+
+      // Console debug (unchanged)
+      this.logger.debug(`🌐 ${method} ${url}`);
+
+      // Build a sanitised copy of headers (redact secrets) for the log
+      const logHeaders: Record<string, string> = {};
+      if (requestConfig.headers) {
+        const SENSITIVE = ["authorization", "x-mxc-sign", "x-mxc-nonce", "apiKey", "signature", "request-time"];
+        for (const [k, v] of Object.entries(requestConfig.headers)) {
+          if (SENSITIVE.includes(k.toLowerCase())) {
+            logHeaders[k] = "[REDACTED]";
+          } else if (typeof v === "string") {
+            logHeaders[k] = v;
+          }
+        }
       }
+
+      // Persist to http-YYYY-MM-DD.log (always, regardless of log level)
+      this.logger.logHttp({
+        method,
+        url,
+        requestHeaders: logHeaders,
+        requestBody: requestConfig.data ?? undefined,
+      });
+
       return requestConfig;
     });
 
-    // Response interceptor for error handling
+    // Response interceptor — log full response/error details
     this.httpClient.interceptors.response.use(
       (response) => {
+        const durationMs = Date.now() - ((response.config as any)._startTime ?? Date.now());
+        const method = (response.config?.method ?? "GET").toUpperCase();
+        const url = `${response.config?.baseURL ?? ""}${response.config?.url ?? ""}`;
+
+        // Console debug (unchanged)
         this.logger.debug(`✅ ${response.status} ${response.statusText}`);
+
+        // Persist full response to http-YYYY-MM-DD.log
+        this.logger.logHttp({
+          method,
+          url,
+          responseStatus: response.status,
+          responseBody: response.data,
+          durationMs,
+        });
+
         return response;
       },
       (error) => {
+        const durationMs = Date.now() - ((error.config?._startTime) ?? Date.now());
+        const endpoint = error.config?.url;
+        const method = (error.config?.method ?? "GET").toUpperCase();
+        const url = `${error.config?.baseURL ?? ""}${error.config?.url ?? ""}`;
+
         // Parse the axios error into a user-friendly MEXC error
         const mexcError = parseAxiosError(
           error,
-          error.config?.url,
-          error.config?.method?.toUpperCase()
+          endpoint,
+          method
         );
 
-        // Log the user-friendly error message
+        // Log the user-friendly error message to console
         this.logger.error(mexcError.getUserFriendlyMessage());
 
-        // Log detailed error information in debug mode
+        // Log detailed error info in debug mode
         if (this.logger.isDebugEnabled()) {
           this.logger.debug(
             "Detailed error info:",
             formatErrorForLogging(mexcError)
           );
         }
+
+        // Extract the raw MEXC response body (already parsed by transformResponse)
+        const responseBody = error.response?.data;
+        const responseStatus = error.response?.status;
+
+        // Persist full error details to http-YYYY-MM-DD.log (always)
+        this.logger.logHttp({
+          method,
+          url,
+          requestBody: error.config?.data ?? undefined,
+          responseStatus,
+          responseBody,
+          error: {
+            message: mexcError.message,
+            code: mexcError.code,
+            data: mexcError instanceof MexcApiError ? (mexcError as MexcApiError).responseData : undefined,
+          },
+          durationMs,
+        });
 
         return Promise.reject(mexcError);
       }

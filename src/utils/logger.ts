@@ -154,6 +154,37 @@ export class Logger {
   }
 
   /**
+   * Persist an HTTP request/response record to the http-YYYY-MM-DD.log file.
+   * Called by the axios interceptors for every outbound request, regardless of log level.
+   */
+  logHttp(record: {
+    method: string;
+    url: string;
+    requestHeaders?: Record<string, string>;
+    requestBody?: any;
+    responseStatus?: number;
+    responseBody?: any;
+    error?: {
+      message: string;
+      code?: string | number;
+      data?: any;
+    };
+    durationMs?: number;
+  }): void {
+    this.appendJson("http", {
+      ts: new Date().toISOString(),
+      method: record.method,
+      url: record.url,
+      requestHeaders: record.requestHeaders,
+      requestBody: record.requestBody,
+      responseStatus: record.responseStatus,
+      responseBody: record.responseBody,
+      error: record.error,
+      durationMs: record.durationMs,
+    });
+  }
+
+  /**
    * Flush and close all file streams. Call during graceful shutdown.
    */
   async close(): Promise<void> {
@@ -234,7 +265,7 @@ export class Logger {
     if (!this.logDir) return;
     try {
       const cutoff = Date.now() - this.retentionDays * 24 * 60 * 60 * 1000;
-      const prefixRe = /^(signals|trades|bot)-(\d{4}-\d{2}-\d{2})\.log$/;
+      const prefixRe = /^(signals|trades|bot|http)-(\d{4}-\d{2}-\d{2})\.log$/;
 
       for (const entry of fs.readdirSync(this.logDir)) {
         const match = entry.match(prefixRe);
