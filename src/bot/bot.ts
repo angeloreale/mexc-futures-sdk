@@ -154,7 +154,7 @@ export class SignalBot {
 
     for (const signal of signals) {
       this.logger.info(
-        `   ${signal.action} ${signal.rawSymbol}${signal.orderType === "trigger" ? `@${signal.entry}` : ""} SL ${signal.sl} TP ${signal.tp.join(",") || "(default)"}${signal.riskPercentOverride !== undefined ? ` R${signal.riskPercentOverride}%` : ""} (${signal.orderType === "trigger" ? "🔔 trigger order" : "💹 market order"})`
+        `   ${signal.action} ${signal.rawSymbol}${signal.orderType === "trigger" ? `@${signal.entry}` : ""} SL ${signal.sl} TP ${signal.tp.join(",") || "(default)"}${signal.riskPercentOverride !== undefined ? ` R${signal.riskPercentOverride}%` : ""} (${signal.orderType === "trigger" ? "🔔 limit entry" : "💹 market order"})`
       );
       // Persist parsed signal to file log
       this.logger.logSignal(signal);

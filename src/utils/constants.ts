@@ -1,4 +1,4 @@
-export const API_BASE_URL = "https://futures.mexc.com/api/v1";
+export const API_BASE_URL = "https://api.mexc.com/api/v1";
 
 export const ENDPOINTS = {
   // Private endpoints (require authentication)

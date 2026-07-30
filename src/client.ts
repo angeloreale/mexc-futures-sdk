@@ -86,7 +86,7 @@ export class MexcFuturesSDK {
     }
 
     this.httpClient = axios.create({
-      baseURL: config.baseURL || "https://futures.mexc.com/api/v1",
+      baseURL: config.baseURL || "https://api.mexc.com/api/v1",
       timeout: config.timeout || 30000,
       // Note: auth headers (ApiKey/Request-Time/Signature) are NOT set here — they are
       // injected fresh by the request interceptor below so every request carries a current

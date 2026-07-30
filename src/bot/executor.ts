@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { MexcFuturesSDK } from "../client";
-import { SubmitOrderRequest, SubmitTriggerOrderRequest, SubmitOrderResponse, SubmitTriggerOrderResponse } from "../types/orders";
+import { SubmitOrderRequest, SubmitOrderResponse } from "../types/orders";
 import { BotConfig, ResolvedTrade, TradeRecord } from "./types";
 import { Logger } from "../utils/logger";
 
@@ -26,7 +26,7 @@ export class TradeExecutor {
   async execute(trade: ResolvedTrade): Promise<TradeRecord[]> {
     // Dry-run / disabled checks
     if (this.config.dryRun) {
-      const orderTypeLabel = trade.signal.orderType === "trigger" ? "TRIGGER" : "MARKET";
+      const orderTypeLabel = trade.signal.orderType === "trigger" ? "LIMIT_ENTRY" : "MARKET";
       this.logger.info(`🧪 [DRY RUN] Would submit ${orderTypeLabel} order:`);
       this.logger.info(
         `   Symbol: ${trade.mexcSymbol}, Side: ${trade.side === 1 ? "LONG" : "SHORT"}`
@@ -156,7 +156,10 @@ export class TradeExecutor {
   }
 
   /**
-   * Submit a single order — either market or trigger depending on isTrigger.
+   * Submit a single order — market (type=5) or limit entry (type=1).
+   * Limit orders replace the old /trigger/submit endpoint (which was removed
+   * from the futures.mexc.com domain). A limit order at the entry price sits in
+   * the order book until filled — functionally equivalent to a trigger entry.
    */
   private async submitSingleOrder(
     trade: ResolvedTrade,
@@ -168,27 +171,14 @@ export class TradeExecutor {
     const hash = crypto.createHash("md5").update(rawId).digest("hex").substring(0, 16);
     const externalOid = `tg_${hash}`;
 
-    if (isTrigger) {
-      return this.submitTriggerOrder(trade, volume, takeProfitPrice, externalOid);
-    }
-    return this.submitMarketOrder(trade, volume, takeProfitPrice, externalOid);
-  }
+    const orderType: 1 | 5 = isTrigger ? 1 : 5; // 1=limit, 5=market
 
-  /**
-   * Submit a regular market order.
-   */
-  private async submitMarketOrder(
-    trade: ResolvedTrade,
-    volume: number,
-    takeProfitPrice: number,
-    externalOid: string
-  ): Promise<TradeRecord> {
     const orderParams: SubmitOrderRequest = {
       symbol: trade.mexcSymbol,
       price: trade.entry,
       vol: volume,
       side: trade.side,
-      type: 5, // market order
+      type: orderType,
       openType: trade.openType,
       leverage: trade.leverage,
       stopLossPrice: trade.stopLossPrice,
@@ -196,8 +186,9 @@ export class TradeExecutor {
       externalOid,
     };
 
+    const label = isTrigger ? "Limit entry" : "Market";
     this.logger.info(
-      `🚀 Market order: ${trade.mexcSymbol} ${trade.side === 1 ? "LONG" : "SHORT"} vol=${volume} SL=${trade.stopLossPrice} TP=${takeProfitPrice}`
+      `🚀 ${label} order: ${trade.mexcSymbol} ${trade.side === 1 ? "LONG" : "SHORT"} price=${trade.entry} vol=${volume} SL=${trade.stopLossPrice} TP=${takeProfitPrice}`
     );
 
     try {
@@ -208,49 +199,10 @@ export class TradeExecutor {
     }
   }
 
-  /**
-   * Submit a trigger (stop-entry) order.
-   * The order stays pending until market price reaches triggerPrice (trade.entry).
-   * On trigger, executes as a market order (type=5, price=0).
-   */
-  private async submitTriggerOrder(
-    trade: ResolvedTrade,
-    volume: number,
-    takeProfitPrice: number,
-    externalOid: string
-  ): Promise<TradeRecord> {
-    const orderParams: SubmitTriggerOrderRequest = {
-      symbol: trade.mexcSymbol,
-      triggerType: 1, // latest price trigger
-      triggerPrice: trade.entry,
-      price: 0, // market execution on trigger
-      vol: volume,
-      side: trade.side,
-      type: 5, // market execution on trigger
-      openType: trade.openType,
-      leverage: trade.leverage,
-      stopLossPrice: trade.stopLossPrice,
-      takeProfitPrice: takeProfitPrice,
-      externalOid,
-    };
-
-    this.logger.info(
-      `🔔 Trigger order: ${trade.mexcSymbol} ${trade.side === 1 ? "LONG" : "SHORT"} trigger=${trade.entry} vol=${volume} SL=${trade.stopLossPrice} TP=${takeProfitPrice}`
-    );
-
-    try {
-      const response: SubmitTriggerOrderResponse =
-        await this.client.submitTriggerOrder(orderParams);
-      return this.toTradeRecord(trade, response, volume, takeProfitPrice);
-    } catch (error) {
-      return this.toErrorRecord(trade, error, volume, takeProfitPrice);
-    }
-  }
-
   /** Convert a successful/failed API response to a TradeRecord. */
   private toTradeRecord(
     trade: ResolvedTrade,
-    response: SubmitOrderResponse | SubmitTriggerOrderResponse,
+    response: SubmitOrderResponse,
     volume: number,
     takeProfitPrice: number
   ): TradeRecord {
