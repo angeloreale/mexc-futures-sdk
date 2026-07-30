@@ -27,10 +27,15 @@ export function calculatePositionSize(
     return null;
   }
 
+  // Determine risk percentage: per-order riskPercentOverride (e.g. 2.5 → 2.5%) or config default
+  const effectiveRiskPercent = signal.riskPercentOverride !== undefined
+    ? signal.riskPercentOverride / 100
+    : config.riskPercent;
+
   // Risk amount
-  const riskAmount = equity * config.riskPercent;
+  const riskAmount = equity * effectiveRiskPercent;
   logger.debug(
-    `💰 Equity: ${equity}, Risk%: ${config.riskPercent}, Risk amount: ${riskAmount}`
+    `💰 Equity: ${equity}, Risk%: ${(effectiveRiskPercent * 100).toFixed(1)}%, Risk amount: ${riskAmount}`
   );
 
   // Determine effective leverage (clamped to contract limits)
@@ -139,6 +144,7 @@ export function calculatePositionSize(
     takeProfitPrice,
     allTpTargets,
     equity,
+    riskPercent: effectiveRiskPercent,
     riskAmount,
     minVol: contract.minVol,
     volScale: contract.volScale || 0,

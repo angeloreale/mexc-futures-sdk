@@ -39,7 +39,7 @@ export class TradeExecutor {
         `   Leverage: ${trade.leverage}, OpenType: ${trade.openType === 1 ? "Isolated" : "Cross"}`
       );
       this.logger.info(
-        `   Risk: ${trade.riskAmount.toFixed(2)} USDT (${(this.config.riskPercent * 100).toFixed(1)}% of ${trade.equity.toFixed(2)})`
+        `   Risk: ${trade.riskAmount.toFixed(2)} USDT (${(trade.riskPercent * 100).toFixed(1)}% of ${trade.equity.toFixed(2)})`
       );
 
       const record: TradeRecord = {

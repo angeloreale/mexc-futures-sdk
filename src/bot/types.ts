@@ -16,6 +16,8 @@ export interface TradeSignal {
   tp: number[];
   /** Order type: "market" when no @/EP given, "trigger" when explicit entry provided */
   orderType: "market" | "trigger";
+  /** Optional per-order risk override as a percentage (0-6, e.g. 2.5 = 2.5%). Falls back to config.riskPercent when absent. */
+  riskPercentOverride?: number;
   /** Telegram message ID for idempotency */
   messageId?: number;
   /** Telegram channel/chat ID */
@@ -49,6 +51,8 @@ export interface ResolvedTrade {
   allTpTargets: number[];
   /** Account equity at time of sizing */
   equity: number;
+  /** Risk percentage applied for this trade (0.01 = 1%), may differ from config default */
+  riskPercent: number;
   /** Risk amount (equity * riskPercent) */
   riskAmount: number;
   /** Minimum order volume (contracts) */

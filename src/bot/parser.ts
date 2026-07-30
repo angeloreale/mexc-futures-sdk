@@ -7,19 +7,20 @@ import { TradeSignal } from "./types";
  *   SELL BTCUSDT@65000 SL 66000 TP1 64000 TP2 63000 TP3 62000
  *   BUY ETHUSDT@3500 SL 3400
  *   BUY ZECUSDT SL 459.41 TP1 467.72 TP2 468.80 TP3 471.42  (market — no @/EP)
+ *   BUY BNBUSDT@571.22 SL 569.68 TP1 571.49 TP2 572.21 R2  (with risk override)
  *
  * SIGNAL_REGEX captures (with @price or EP price):
  *   1: action (BUY|SELL)
  *   2: symbol (e.g. TAOUSDT, USDJPY)
  *   3: entry price
  *   4: SL price
- *   5: rest of line for TP extraction
+ *   5: rest of line for TP + risk extraction
  *
  * SIGNAL_REGEX_MARKET captures (market — no entry price):
  *   1: action (BUY|SELL)
  *   2: symbol
  *   3: SL price
- *   4: rest of line for TP extraction
+ *   4: rest of line for TP + risk extraction
  */
 const SIGNAL_REGEX =
   /\b(BUY|SELL)\s+([A-Z][A-Z0-9]{2,19})@(\d+(?:\.\d+)?)\s+SL\s+(\d+(?:\.\d+)?)(.*)/i;
@@ -34,8 +35,14 @@ const SIGNAL_REGEX_MARKET =
 const TP_REGEX = /TP\d*\s+(\d+(?:\.\d+)?)/gi;
 
 /**
- * Try to parse a trade signal from a raw text message.
- * Returns null if the message is not a recognizable signal.
+ * Extract an optional risk percentage marker: R<number> (e.g. R2.5 = 2.5%, R6 = 6%).
+ * Must appear as a standalone token (word boundary). Range 0–6.
+ */
+const RISK_REGEX = /\bR(\d+(?:\.\d+)?)\b/i;
+
+/**
+ * Try to parse a trade signal from a single line of text.
+ * Returns null if the line is not a recognizable signal.
  */
 export function parseSignal(
   text: string,
@@ -94,6 +101,9 @@ export function parseSignal(
     }
   }
 
+  // Strip risk marker before TP extraction so it doesn't interfere
+  const riskPercentOverride = parseRiskOverride(tpSection);
+
   // Extract TP values
   const tpValues: number[] = [];
   let tpMatch;
@@ -131,10 +141,63 @@ export function parseSignal(
     sl,
     tp: tpValues, // may be empty — caller should apply default TP ratio
     orderType: isMarketEntry ? "market" : "trigger",
+    riskPercentOverride,
     messageId,
     chatId,
     timestamp,
   };
+}
+
+/**
+ * Parse an optional risk percentage marker from the tail of a signal line.
+ * E.g. R2.5 → 2.5 (meaning 2.5%), R6 → 6%. Valid range 0–6.
+ * Returns the percentage as a float, or undefined if absent.
+ */
+function parseRiskOverride(tail: string): number | undefined {
+  const m = tail.match(RISK_REGEX);
+  if (m) {
+    const pct = parseFloat(m[1]);
+    if (isFinite(pct) && pct >= 0 && pct <= 6) {
+      return pct;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Parse zero or more trade signals from a raw text message.
+ *
+ * Supports multi-line messages where each line contains one signal:
+ * ```
+ * SELL TAOUSDT@190.08 SL 198.84 TP1 188.89 TP2 188.25 TP 188.07
+ * BUY USDCNH@6.77059 SL 6.76867 TP1 6.7714 TP2 6.7727 TP3 6.7744
+ * BUY BNBUSDT@571.22 SL 569.68 TP1 571.49 TP2 572.21 TP3 573.32
+ * ```
+ *
+ * Returns an array of parsed signals (empty if no signals found).
+ */
+export function parseSignals(
+  text: string,
+  messageId?: number,
+  chatId?: number | string,
+  timestamp?: number
+): TradeSignal[] {
+  if (!text || typeof text !== "string") return [];
+
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const signals: TradeSignal[] = [];
+  for (const line of lines) {
+    const signal = parseSignal(line, messageId, chatId, timestamp);
+    if (signal) {
+      signals.push(signal);
+    }
+  }
+
+  return signals;
 }
 
 /**

@@ -3,7 +3,7 @@ import { message, channelPost } from "telegraf/filters";
 import { MexcFuturesSDK } from "../client";
 import { Logger } from "../utils/logger";
 import { BotConfig, TradeSignal } from "./types";
-import { parseSignal, normalizeSymbol } from "./parser";
+import { parseSignals, normalizeSymbol } from "./parser";
 import { ContractResolver } from "./resolver";
 import { calculatePositionSize } from "./sizer";
 import { TradeExecutor } from "./executor";
@@ -141,25 +141,32 @@ export class SignalBot {
       return;
     }
 
-    // Try to parse as signal
-    const signal = parseSignal(text, messageId, chatId, msg.date);
-    if (!signal) {
+    // Try to parse as one or more trade signals (multi-line support)
+    const signals = parseSignals(text, messageId, chatId, msg.date);
+    if (signals.length === 0) {
       this.logger.debug("📝 Not a trade signal — ignoring");
       return;
     }
 
     this.logger.info(
-      `📊 Signal detected: ${signal.action} ${signal.rawSymbol}${signal.orderType === "trigger" ? `@${signal.entry}` : ""} SL ${signal.sl} TP ${signal.tp.join(",") || "(default)"} (${signal.orderType === "trigger" ? "🔔 trigger order" : "💹 market order"})`
+      `📊 ${signals.length} signal(s) detected in message ${chatId}#${messageId}`
     );
 
-    // Persist parsed signal to file log
-    this.logger.logSignal(signal);
+    for (const signal of signals) {
+      this.logger.info(
+        `   ${signal.action} ${signal.rawSymbol}${signal.orderType === "trigger" ? `@${signal.entry}` : ""} SL ${signal.sl} TP ${signal.tp.join(",") || "(default)"}${signal.riskPercentOverride !== undefined ? ` R${signal.riskPercentOverride}%` : ""} (${signal.orderType === "trigger" ? "🔔 trigger order" : "💹 market order"})`
+      );
+      // Persist parsed signal to file log
+      this.logger.logSignal(signal);
+    }
 
     // Mark as processed now to prevent duplicate processing on restart
     this.state.markProcessed(chatId, messageId);
 
-    // Process the signal
-    await this.processSignal(signal);
+    // Process each signal sequentially
+    for (const signal of signals) {
+      await this.processSignal(signal);
+    }
   }
 
   /**
@@ -172,7 +179,7 @@ export class SignalBot {
       return this.equityCache.equity;
     }
 
-    const equity = await this.fetchEquityWithRetry(3);
+    const equity = await this.fetchEquityWithRetry(5);
     this.equityCache = { equity, ts: now };
     return equity;
   }
@@ -291,7 +298,8 @@ export class SignalBot {
       }
       this.logger.info(`💰 Account equity: ${equity} ${this.config.baseCurrency}`);
     } catch (error) {
-      this.logger.error("❌ Failed to fetch account equity:", error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`❌ Failed to fetch account equity: ${errorMsg}`);
       return;
     }
 
