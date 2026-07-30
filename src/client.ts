@@ -22,6 +22,8 @@ import {
   SubmitOrderResponse,
   SubmitTriggerOrderRequest,
   SubmitTriggerOrderResponse,
+  SubmitPlanOrderRequest,
+  SubmitPlanOrderResponse,
   GetOrderResponse,
 } from "./types/orders";
 import {
@@ -368,6 +370,78 @@ export class MexcFuturesSDK {
       );
 
       this.logger.debug("🔍 Trigger order response:", response.data);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  /**
+   * Submit a plan (stop/conditional) order using /api/v1/private/planorder/place/v2.
+   * Used when a signal specifies an explicit entry price (@ or EP).
+   * The order stays pending until the market price crosses the triggerPrice
+   * in the specified direction.
+   *
+   * triggerType:
+   *   1 = price >= triggerPrice  (buy stop  — triggers when price rises to EP)
+   *   2 = price <= triggerPrice  (sell stop — triggers when price falls to EP)
+   */
+  async submitPlanOrder(
+    params: SubmitPlanOrderRequest
+  ): Promise<SubmitPlanOrderResponse> {
+    try {
+      const p = params;
+      if (!p || typeof p.symbol !== "string" || p.symbol.length === 0) {
+        throw new MexcValidationError("symbol is required", "symbol");
+      }
+      if (!Number.isFinite(p.triggerPrice) || p.triggerPrice <= 0) {
+        throw new MexcValidationError("triggerPrice must be a finite number > 0", "triggerPrice");
+      }
+      if (![1, 2].includes(p.triggerType as number)) {
+        throw new MexcValidationError("triggerType must be 1 (>=) or 2 (<=)", "triggerType");
+      }
+      if (![1, 2, 3, 4, 5].includes(p.orderType as number)) {
+        throw new MexcValidationError("orderType must be 1..5", "orderType");
+      }
+      if (![1, 2].includes(p.executeCycle as number)) {
+        throw new MexcValidationError("executeCycle must be 1 (24h) or 2 (7d)", "executeCycle");
+      }
+      if (![1, 2, 3].includes(p.trend as number)) {
+        throw new MexcValidationError("trend must be 1 (latest), 2 (fair), or 3 (index)", "trend");
+      }
+      if (!Number.isFinite(p.vol) || p.vol <= 0) {
+        throw new MexcValidationError("vol must be a finite number > 0", "vol");
+      }
+      if (![1, 2, 3, 4].includes(p.side as number)) {
+        throw new MexcValidationError("side must be one of 1,2,3,4", "side");
+      }
+      if (![1, 2].includes(p.openType as number)) {
+        throw new MexcValidationError("openType must be 1 (isolated) or 2 (cross)", "openType");
+      }
+      if (p.leverage !== undefined && (!Number.isFinite(p.leverage) || p.leverage <= 0)) {
+        throw new MexcValidationError("leverage must be a finite number > 0", "leverage");
+      }
+
+      this.logger.info("🎯 Submitting plan order using /planorder/place/v2 endpoint");
+
+      this.logger.debug(
+        "📦 Plan order parameters:",
+        JSON.stringify(params, null, 2)
+      );
+
+      const headers = generateHeaders(
+        this.getAuthOptions(),
+        true,
+        params
+      );
+
+      const response = await this.httpClient.post(
+        ENDPOINTS.SUBMIT_PLAN_ORDER,
+        params,
+        { headers }
+      );
+
+      this.logger.debug("🔍 Plan order response:", response.data);
       return response.data;
     } catch (error) {
       throw error;

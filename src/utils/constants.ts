@@ -4,6 +4,7 @@ export const ENDPOINTS = {
   // Private endpoints (require authentication)
   SUBMIT_ORDER: "/private/order/submit",
   SUBMIT_TRIGGER_ORDER: "/private/order/trigger/submit",
+  SUBMIT_PLAN_ORDER: "/private/planorder/place/v2",
   CANCEL_ORDER: "/private/order/cancel",
   CANCEL_ORDER_BY_EXTERNAL_ID: "/private/order/cancel_with_external",
   CANCEL_ALL_ORDERS: "/private/order/cancel_all",

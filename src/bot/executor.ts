@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { MexcFuturesSDK } from "../client";
-import { SubmitOrderRequest, SubmitOrderResponse } from "../types/orders";
+import { SubmitOrderRequest, SubmitOrderResponse, SubmitPlanOrderRequest } from "../types/orders";
 import { BotConfig, ResolvedTrade, TradeRecord } from "./types";
 import { Logger } from "../utils/logger";
 
@@ -156,10 +156,16 @@ export class TradeExecutor {
   }
 
   /**
-   * Submit a single order — market (type=5) or limit entry (type=1).
-   * Limit orders replace the old /trigger/submit endpoint (which was removed
-   * from the futures.mexc.com domain). A limit order at the entry price sits in
-   * the order book until filled — functionally equivalent to a trigger entry.
+   * Submit a single order.
+   *
+   * Market orders (isTrigger=false): immediate fill via /order/submit (type=5).
+   *
+   * Plan/stop orders (isTrigger=true): placed via /planorder/place/v2.
+   * The order stays PENDING until the market price crosses the entry (trigger)
+   * level in the correct direction, then executes at market.
+   *
+   *  - BUY @ EP  → buy stop:  triggerType=1 (price >= EP → triggers when price RISES)
+   *  - SELL @ EP → sell stop: triggerType=2 (price <= EP → triggers when price FALLS)
    */
   private async submitSingleOrder(
     trade: ResolvedTrade,
@@ -171,14 +177,47 @@ export class TradeExecutor {
     const hash = crypto.createHash("md5").update(rawId).digest("hex").substring(0, 16);
     const externalOid = `tg_${hash}`;
 
-    const orderType: 1 | 5 = isTrigger ? 1 : 5; // 1=limit, 5=market
+    if (isTrigger) {
+      // Plan order (stop/conditional entry) via /planorder/place/v2.
+      // triggerType determines direction:
+      //   BUY  → side=1, triggerType=1 (>= EP: fires when price rises to EP)
+      //   SELL → side=3, triggerType=2 (<= EP: fires when price falls to EP)
+      const isBuy = trade.side === 1;
+      const planParams: SubmitPlanOrderRequest = {
+        symbol: trade.mexcSymbol,
+        triggerPrice: trade.entry,
+        triggerType: isBuy ? 1 : 2, // 1=price>=EP (buy stop), 2=price<=EP (sell stop)
+        orderType: 5, // market execution on trigger
+        executeCycle: 1, // 24 hours
+        trend: 1, // latest price
+        vol: volume,
+        leverage: trade.leverage,
+        side: trade.side,
+        openType: trade.openType,
+        stopLossPrice: trade.stopLossPrice,
+        takeProfitPrice: takeProfitPrice,
+        externalOid,
+      };
 
+      this.logger.info(
+        `🎯 Plan/Stop entry: ${trade.mexcSymbol} ${isBuy ? "LONG" : "SHORT"} trigger@${trade.entry} vol=${volume} SL=${trade.stopLossPrice} TP=${takeProfitPrice}`
+      );
+
+      try {
+        const response = await this.client.submitPlanOrder(planParams);
+        return this.toTradeRecord(trade, response as SubmitOrderResponse, volume, takeProfitPrice);
+      } catch (error) {
+        return this.toErrorRecord(trade, error, volume, takeProfitPrice);
+      }
+    }
+
+    // Market order — immediate fill
     const orderParams: SubmitOrderRequest = {
       symbol: trade.mexcSymbol,
       price: trade.entry,
       vol: volume,
       side: trade.side,
-      type: orderType,
+      type: 5, // market
       openType: trade.openType,
       leverage: trade.leverage,
       stopLossPrice: trade.stopLossPrice,
@@ -186,9 +225,8 @@ export class TradeExecutor {
       externalOid,
     };
 
-    const label = isTrigger ? "Limit entry" : "Market";
     this.logger.info(
-      `🚀 ${label} order: ${trade.mexcSymbol} ${trade.side === 1 ? "LONG" : "SHORT"} price=${trade.entry} vol=${volume} SL=${trade.stopLossPrice} TP=${takeProfitPrice}`
+      `🚀 Market order: ${trade.mexcSymbol} ${trade.side === 1 ? "LONG" : "SHORT"} price=${trade.entry} vol=${volume} SL=${trade.stopLossPrice} TP=${takeProfitPrice}`
     );
 
     try {
