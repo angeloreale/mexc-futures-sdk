@@ -41,6 +41,14 @@ const TP_REGEX = /TP\d*\s+(\d+(?:\.\d+)?)/gi;
 const RISK_REGEX = /\bR(\d+(?:\.\d+)?)\b/i;
 
 /**
+ * Extract an optional plan-order validity marker: V<number> (e.g. V7 = 7 days).
+ * Must appear as a standalone token (word boundary).
+ *   V1 or no V → executeCycle 1 (24 hours, default)
+ *   V7        → executeCycle 2 (7 days)
+ */
+const VALIDITY_REGEX = /\bV(\d+)\b/i;
+
+/**
  * Try to parse a trade signal from a single line of text.
  * Returns null if the line is not a recognizable signal.
  */
@@ -104,6 +112,9 @@ export function parseSignal(
   // Strip risk marker before TP extraction so it doesn't interfere
   const riskPercentOverride = parseRiskOverride(tpSection);
 
+  // Parse optional validity marker (V7 = 7 days, V1 or absent = 24h)
+  const executeCycle = parseValidity(tpSection);
+
   // Extract TP values
   const tpValues: number[] = [];
   let tpMatch;
@@ -142,6 +153,7 @@ export function parseSignal(
     tp: tpValues, // may be empty — caller should apply default TP ratio
     orderType: isMarketEntry ? "market" : "trigger",
     riskPercentOverride,
+    executeCycle,
     messageId,
     chatId,
     timestamp,
@@ -160,6 +172,21 @@ function parseRiskOverride(tail: string): number | undefined {
     if (isFinite(pct) && pct >= 0 && pct <= 6) {
       return pct;
     }
+  }
+  return undefined;
+}
+
+/**
+ * Parse an optional plan-order validity marker from the tail of a signal line.
+ * E.g. V7 → executeCycle 2 (7 days), anything else → 1 (24 hours).
+ * Returns executeCycle (1 or 2), or undefined if absent.
+ */
+function parseValidity(tail: string): 1 | 2 | undefined {
+  const m = tail.match(VALIDITY_REGEX);
+  if (m) {
+    const days = parseInt(m[1], 10);
+    if (days >= 7) return 2; // 7+ days → executeCycle 2
+    return 1; // default 24h
   }
   return undefined;
 }

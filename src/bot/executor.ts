@@ -230,7 +230,7 @@ export class TradeExecutor {
         triggerPrice: entry,
         triggerType,
         orderType: 5, // market execution on trigger
-        executeCycle: 1, // 24 hours
+        executeCycle: trade.signal.executeCycle ?? 1, // V7 → 7d, default 24h
         trend: 1, // latest price
         vol: volume,
         leverage: trade.leverage,
