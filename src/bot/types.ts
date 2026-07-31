@@ -61,6 +61,8 @@ export interface ResolvedTrade {
   volScale: number;
   /** Volume step unit */
   volUnit: number;
+  /** Current market price at time of resolution (used to determine trigger direction) */
+  currentPrice: number;
 }
 
 /**

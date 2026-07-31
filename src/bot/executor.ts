@@ -161,11 +161,19 @@ export class TradeExecutor {
    * Market orders (isTrigger=false): immediate fill via /order/submit (type=5).
    *
    * Plan/stop orders (isTrigger=true): placed via /planorder/place/v2.
-   * The order stays PENDING until the market price crosses the entry (trigger)
-   * level in the correct direction, then executes at market.
+   * The triggerType is chosen so the order is ALWAYS pending — it only fires
+   * when the market price actually CROSSES the entry price, regardless of
+   * which side of the entry the market is currently on:
    *
-   *  - BUY @ EP  → buy stop:  triggerType=1 (price >= EP → triggers when price RISES)
-   *  - SELL @ EP → sell stop: triggerType=2 (price <= EP → triggers when price FALLS)
+   *   BUY:
+   *     currentPrice < entry  → triggerType=1 (price >= EP, buy stop — wait for rise)
+   *     currentPrice >= entry → triggerType=2 (price <= EP, buy limit — wait for drop)
+   *   SELL:
+   *     currentPrice > entry  → triggerType=2 (price <= EP, sell stop — wait for drop)
+   *     currentPrice <= entry → triggerType=1 (price >= EP, sell limit — wait for rise)
+   *
+   * If currentPrice ≈ entry (within 0.01%), falls back to a market order
+   * since either trigger direction would fire immediately.
    */
   private async submitSingleOrder(
     trade: ResolvedTrade,
@@ -178,15 +186,49 @@ export class TradeExecutor {
     const externalOid = `tg_${hash}`;
 
     if (isTrigger) {
-      // Plan order (stop/conditional entry) via /planorder/place/v2.
-      // triggerType determines direction:
-      //   BUY  → side=1, triggerType=1 (>= EP: fires when price rises to EP)
-      //   SELL → side=3, triggerType=2 (<= EP: fires when price falls to EP)
       const isBuy = trade.side === 1;
+      const entry = trade.entry;
+      const cp = trade.currentPrice;
+
+      // If current price is within 0.01% of entry, either trigger direction
+      // fires immediately — fall back to market order.
+      const tolerance = entry * 0.0001;
+      if (Math.abs(cp - entry) <= tolerance) {
+        this.logger.info(
+          `📍 Price ${cp} ≈ entry ${entry} (within tolerance) — using market order instead of plan order`
+        );
+        return this.submitSingleOrder(trade, volume, takeProfitPrice, false);
+      }
+
+      // Determine triggerType so the order is always pending:
+      //   triggerType=1 → fires when price RISES to >= triggerPrice
+      //   triggerType=2 → fires when price FALLS to <= triggerPrice
+      let triggerType: 1 | 2;
+      let dirLabel: string;
+
+      if (isBuy) {
+        if (cp < entry) {
+          triggerType = 1; // price is below → wait for rise (buy stop)
+          dirLabel = "↑ buy stop";
+        } else {
+          triggerType = 2; // price is above → wait for drop (buy limit)
+          dirLabel = "↓ buy limit";
+        }
+      } else {
+        if (cp > entry) {
+          triggerType = 2; // price is above → wait for drop (sell stop)
+          dirLabel = "↓ sell stop";
+        } else {
+          triggerType = 1; // price is below → wait for rise (sell limit)
+          dirLabel = "↑ sell limit";
+        }
+      }
+
+      // Plan order (stop/conditional entry) via /planorder/place/v2.
       const planParams: SubmitPlanOrderRequest = {
         symbol: trade.mexcSymbol,
-        triggerPrice: trade.entry,
-        triggerType: isBuy ? 1 : 2, // 1=price>=EP (buy stop), 2=price<=EP (sell stop)
+        triggerPrice: entry,
+        triggerType,
         orderType: 5, // market execution on trigger
         executeCycle: 1, // 24 hours
         trend: 1, // latest price
@@ -200,7 +242,7 @@ export class TradeExecutor {
       };
 
       this.logger.info(
-        `🎯 Plan/Stop entry: ${trade.mexcSymbol} ${isBuy ? "LONG" : "SHORT"} trigger@${trade.entry} vol=${volume} SL=${trade.stopLossPrice} TP=${takeProfitPrice}`
+        `🎯 Plan/Stop entry: ${trade.mexcSymbol} ${isBuy ? "LONG" : "SHORT"} ${dirLabel} trigger@${entry} (current=${cp}) vol=${volume} SL=${trade.stopLossPrice} TP=${takeProfitPrice}`
       );
 
       try {

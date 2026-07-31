@@ -96,7 +96,7 @@ describe("calculatePositionSize", () => {
     const contract = makeContract();
     const equity = 10000;
 
-    const result = calculatePositionSize(signal, contract, equity, defaultConfig, logger);
+    const result = calculatePositionSize(signal, contract, equity, 187.54, defaultConfig, logger);
     expect(result).not.toBeNull();
     expect(result!.side).toBe(1); // open long
     expect(result!.mexcSymbol).toBe("TAO_USDT");
@@ -126,7 +126,7 @@ describe("calculatePositionSize", () => {
     });
     const equity = 10000;
 
-    const result = calculatePositionSize(signal, contract, equity, defaultConfig, logger);
+    const result = calculatePositionSize(signal, contract, equity, 65000, defaultConfig, logger);
     expect(result).not.toBeNull();
     expect(result!.side).toBe(3); // open short
 
@@ -141,7 +141,7 @@ describe("calculatePositionSize", () => {
     const equity = 100; // very small equity
 
     // risk = 1, stop distance = 1, volume = 1 → below minVol 1000
-    const result = calculatePositionSize(signal, contract, equity, defaultConfig, logger);
+    const result = calculatePositionSize(signal, contract, equity, 100, defaultConfig, logger);
     expect(result).toBeNull();
   });
 
@@ -150,7 +150,7 @@ describe("calculatePositionSize", () => {
     const contract = makeContract();
     const equity = 10000;
 
-    const result = calculatePositionSize(signal, contract, equity, defaultConfig, logger);
+    const result = calculatePositionSize(signal, contract, equity, 187.54, defaultConfig, logger);
     expect(result).not.toBeNull();
 
     // default TP = entry + stopDistance * 1.5 = 187.54 + 2.41 * 1.5 = 187.54 + 3.615 = 191.155
@@ -165,7 +165,7 @@ describe("calculatePositionSize", () => {
     const equity = 10000;
     const config = { ...defaultConfig, leverage: 50 };
 
-    const result = calculatePositionSize(signal, contract, equity, config, logger);
+    const result = calculatePositionSize(signal, contract, equity, 187.54, config, logger);
     expect(result).not.toBeNull();
     expect(result!.leverage).toBe(5);
   });
@@ -176,7 +176,7 @@ describe("calculatePositionSize", () => {
     const equity = 1000000;
     const config = { ...defaultConfig, maxNotionalPerTrade: 1000 };
 
-    const result = calculatePositionSize(signal, contract, equity, config, logger);
+    const result = calculatePositionSize(signal, contract, equity, 187.54, config, logger);
     expect(result).not.toBeNull();
     // maxNotional = 1000, entry = 187.54, contractSize = 1
     // maxVol = 1000 / (1 * 187.54) = 5.33 → floor to 5
@@ -189,7 +189,7 @@ describe("calculatePositionSize", () => {
 
     // This actually won't reach calculatePositionSize because parser rejects SL == entry,
     // but the sizer has its own guard
-    const result = calculatePositionSize(signal, contract, 10000, defaultConfig, logger);
+    const result = calculatePositionSize(signal, contract, 10000, 100, defaultConfig, logger);
     expect(result).toBeNull();
   });
 });
