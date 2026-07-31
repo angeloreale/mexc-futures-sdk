@@ -9,6 +9,7 @@ export function calculatePositionSize(
   signal: TradeSignal,
   contract: ContractDetail,
   equity: number,
+  currentPrice: number,
   config: BotConfig,
   logger: Logger
 ): ResolvedTrade | null {
@@ -149,5 +150,6 @@ export function calculatePositionSize(
     minVol: contract.minVol,
     volScale: contract.volScale || 0,
     volUnit: contract.volUnit || 1,
+    currentPrice,
   };
 }

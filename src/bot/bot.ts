@@ -266,24 +266,32 @@ export class SignalBot {
       `✅ Contract found: ${contract.symbol} (size=${contract.contractSize}, minVol=${contract.minVol})`
     );
 
-    // 2.5. If market entry (no @/EP), resolve price via ticker
-    //      For trigger orders, the entry IS the trigger price — no resolution needed
-    if (signal.orderType === "market") {
-      try {
-        const ticker = await this.mexcClient.getTicker(mexcSymbol);
-        const marketPrice = ticker?.data?.lastPrice;
-        if (!marketPrice || marketPrice <= 0) {
-          this.logger.error(`❌ Could not resolve market price for ${mexcSymbol}`);
-          return;
-        }
-        signal.entry = marketPrice;
-        this.logger.info(`💹 Market entry resolved: ${mexcSymbol} @ ${marketPrice}`);
-      } catch (error) {
-        this.logger.error(`❌ Failed to fetch ticker for ${mexcSymbol}:`, error);
+    // 2.5. Resolve entry price via ticker. For market orders this provides the entry;
+    //      for trigger orders it determines the correct trigger direction so the
+    //      plan order stays pending until price actually crosses the entry level.
+    let currentPrice: number;
+    try {
+      const ticker = await this.mexcClient.getTicker(mexcSymbol);
+      currentPrice = ticker?.data?.lastPrice;
+      if (!currentPrice || currentPrice <= 0) {
+        this.logger.error(`❌ Could not resolve market price for ${mexcSymbol}`);
         return;
       }
-    } else {
-      this.logger.info(`🔔 Using explicit entry as trigger price: ${mexcSymbol} @ ${signal.entry}`);
+
+      if (signal.orderType === "market") {
+        signal.entry = currentPrice;
+        this.logger.info(`💹 Market entry resolved: ${mexcSymbol} @ ${currentPrice}`);
+      } else {
+        const dir = signal.action === "BUY"
+          ? (currentPrice >= signal.entry ? "above" : "below")
+          : (currentPrice <= signal.entry ? "below" : "above");
+        this.logger.info(
+          `🔔 Trigger entry: ${mexcSymbol} @ ${signal.entry} | current price ${currentPrice} (${dir} trigger) → will wait for price to cross`
+        );
+      }
+    } catch (error) {
+      this.logger.error(`❌ Failed to fetch ticker for ${mexcSymbol}:`, error);
+      return;
     }
 
     // 3. Get account equity (cached for 10s to avoid rate limits)
@@ -327,6 +335,7 @@ export class SignalBot {
       signal,
       contract,
       equity,
+      currentPrice,
       this.config,
       this.logger
     );
