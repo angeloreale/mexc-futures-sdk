@@ -39,11 +39,19 @@ export function calculatePositionSize(
     `💰 Equity: ${equity}, Risk%: ${(effectiveRiskPercent * 100).toFixed(1)}%, Risk amount: ${riskAmount}`
   );
 
-  // Determine effective leverage (clamped to contract limits)
+  // Determine effective leverage: per-order leverageOverride (e.g. L200) or
+  // config default, clamped to the contract's allowed range.
+  const requestedLeverage =
+    signal.leverageOverride !== undefined ? signal.leverageOverride : config.leverage;
   const leverage = Math.min(
-    Math.max(config.leverage, contract.minLeverage),
+    Math.max(requestedLeverage, contract.minLeverage),
     contract.maxLeverage
   );
+  if (signal.leverageOverride !== undefined && signal.leverageOverride !== leverage) {
+    logger.info(
+      `⚙️ Leverage override ${signal.leverageOverride}x clamped to ${leverage}x (contract ${contract.minLeverage}-${contract.maxLeverage})`
+    );
+  }
 
   // Calculate volume:
   // riskAmount = stopDistance * volume * contractSize

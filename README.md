@@ -110,6 +110,7 @@ BUY TAOUSDT@187.54 SL 185.13 TP 188.81
 SELL BTCUSDT@65000 SL 66000 TP 63000
 BUY ETHUSDT@3500 SL 3400 TP1 3600 TP2 3700 TP3 3800
 BUY SOLUSDT@150 SL 145
+BUY TAOUSDT@187.54 SL 185.13 TP 188.81 R2 L50 V7
 ```
 
 | Element | Meaning |
@@ -119,6 +120,9 @@ BUY SOLUSDT@150 SL 145
 | `SL <price>` | Stop-loss price (mandatory) |
 | `TP <price>` | Take-profit (optional — defaults to 1.5× risk) |
 | `TP1/TP2/TP3` | Multiple TP targets — volume is split equally |
+| `R<number>` | Risk per trade override in % (e.g. `R2` = 2%, valid 0–6) |
+| `L<number>` | Leverage override (e.g. `L200` = 200x, valid 1–200, clamped to the contract max) |
+| `V<number>` | Plan-order validity: `V1`/absent = 24h, `V7` = 7 days |
 
 **Symbol normalization**: `TAOUSDT` → `TAO_USDT`, `BTCUSDT` → `BTC_USDT`
 
@@ -239,6 +243,24 @@ PNL: -12.00 USDT
 3. Tune the cadence with `SUMMARY_INTERVAL_HOURS` and the reporting window with `SUMMARY_WINDOW_HOURS`.
 
 > 💡 Max/min PNL is tracked only while the bot is running (it polls unrealized PNL continuously). If the bot restarts, the stats begin accumulating again from scratch.
+
+### 🚀 Order Placement Alerts
+
+The bot also sends a short alert to the **same summary channel** whenever an order is successfully placed/executed (market fills immediately, trigger entries are placed as pending). It shows the symbol, direction, leverage, entry, SL/TP, volume, notional, risk and the order ID:
+
+```
+🚀 ORDER PLACED
+
+🪙 TAO_USDT LONG · 50x · Isolated
+💹 Market entry @ 123.00
+SL: 122.00 · TP: 124.00, 125.00
+Vol: 41 · Notional: ~5,043.00 USDT
+Risk: 100.00 USDT (1.0%)
+
+Order ID: 817027833053397504
+```
+
+> 💡 These alerts are sent only in live trading mode (`DRY_RUN=false`) — dry-run does not submit real orders.
 
 ---
 

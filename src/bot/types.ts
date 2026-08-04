@@ -18,6 +18,8 @@ export interface TradeSignal {
   orderType: "market" | "trigger";
   /** Optional per-order risk override as a percentage (0-6, e.g. 2.5 = 2.5%). Falls back to config.riskPercent when absent. */
   riskPercentOverride?: number;
+  /** Optional per-order leverage override (1-200, e.g. 200 = 200x). Falls back to config.leverage when absent. */
+  leverageOverride?: number;
   /** Optional plan-order validity: 1 = 24h (default), 2 = 7 days. Set via V7 marker. */
   executeCycle?: 1 | 2;
   /** Telegram message ID for idempotency */

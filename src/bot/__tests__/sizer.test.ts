@@ -115,6 +115,58 @@ describe("calculatePositionSize", () => {
     expect(result!.volume).toBe(41);
   });
 
+  it("uses the signal's leverageOverride clamped to the contract max", () => {
+    const signal = makeSignal({ leverageOverride: 100 });
+    const contract = makeContract(); // minLeverage 1, maxLeverage 50
+    const equity = 10000;
+
+    const result = calculatePositionSize(
+      signal,
+      contract,
+      equity,
+      187.54,
+      defaultConfig,
+      logger
+    );
+    expect(result).not.toBeNull();
+    // 100x override is clamped to the contract max leverage (50)
+    expect(result!.leverage).toBe(50);
+  });
+
+  it("uses a leverageOverride within the contract range as-is", () => {
+    const signal = makeSignal({ leverageOverride: 5 });
+    const contract = makeContract();
+    const equity = 10000;
+
+    const result = calculatePositionSize(
+      signal,
+      contract,
+      equity,
+      187.54,
+      defaultConfig,
+      logger
+    );
+    expect(result).not.toBeNull();
+    expect(result!.leverage).toBe(5);
+  });
+
+  it("falls back to config leverage when no override is present", () => {
+    const signal = makeSignal();
+    const contract = makeContract();
+    const equity = 10000;
+
+    const result = calculatePositionSize(
+      signal,
+      contract,
+      equity,
+      187.54,
+      defaultConfig,
+      logger
+    );
+    expect(result).not.toBeNull();
+    expect(result!.leverage).toBe(defaultConfig.leverage); // 10
+  });
+
   it("calculates correct volume for a SELL signal", () => {
     const signal = makeSignal({
       action: "SELL",
