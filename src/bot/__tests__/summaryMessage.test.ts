@@ -37,6 +37,7 @@ function makeSummary(overrides?: Partial<PositionSummary>): PositionSummary {
       equity: 5678.9,
       currency: "USDT",
     },
+    pendingOrders: [],
     ...overrides,
   };
 }
@@ -49,19 +50,54 @@ describe("formatPositionSummaryMessage", () => {
     expect(text).toContain("Last 4h · report every 8h");
     expect(text).toContain("Open Positions (2)");
     expect(text).toContain("BTC_USDT</b> LONG · 10x");
+    expect(text).toContain("🆔 1");
+    expect(text).toContain("🆔 2");
     expect(text).toContain("PNL: <b>+176.70 USDT</b>");
     expect(text).toContain("max +210.10 / min -5.30 USDT");
     expect(text).toContain("ETH_USDT</b> SHORT · 5x");
     expect(text).toContain("PNL: <b>-12.00 USDT</b>");
-    expect(text).not.toContain("Pending Triggers");
+    expect(text).toContain("Pending Orders (0)");
+    expect(text).toContain("No pending orders");
     expect(text).toContain("Available: 1,234.56 USDT");
     expect(text).toContain("Equity: 5,678.90 USDT");
+  });
+
+  it("renders pending STOP orders as single lines with shortened order ids", () => {
+    const text = formatPositionSummaryMessage(
+      makeSummary({
+        pendingOrders: [
+          {
+            orderId: "817027833053397504",
+            symbol: "TAO_USDT",
+            side: 1,
+            triggerPrice: 187.54,
+            vol: 0.5,
+            leverage: 10,
+            openType: 1,
+          },
+          {
+            orderId: "12",
+            symbol: "ETH_USDT",
+            side: 3,
+            triggerPrice: 3400,
+            vol: 2,
+            leverage: 5,
+            openType: 1,
+          },
+        ],
+      })
+    );
+
+    expect(text).toContain("Pending Orders (2)");
+    expect(text).toContain("🟡 TAO_USDT LONG · STOP @ 187.54 · 0.50 · <code>…397504</code>");
+    expect(text).toContain("🟡 ETH_USDT SHORT · STOP @ 3,400.00 · 2.00 · <code>12</code>");
   });
 
   it("handles an empty account gracefully", () => {
     const text = formatPositionSummaryMessage(
       makeSummary({
         openPositions: [],
+        pendingOrders: [],
         account: { availableBalance: NaN, equity: NaN, currency: "USDT" },
       })
     );

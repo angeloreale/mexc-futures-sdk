@@ -41,6 +41,23 @@ export interface OpenPositionSummary {
   margin: number;
 }
 
+/** A pending STOP (entry) order, shown in the summary as a single line. */
+export interface PendingOrderSummary {
+  /** MEXC order ID */
+  orderId: string;
+  symbol: string;
+  /** 1 = open long, 3 = open short */
+  side: 1 | 3;
+  /** Trigger price */
+  triggerPrice: number;
+  /** Volume (contracts) */
+  vol: number;
+  /** Leverage */
+  leverage: number;
+  /** Open type: 1 = isolated, 2 = cross */
+  openType: 1 | 2;
+}
+
 /**
  * An alert fired while sampling when an open position has travelled more than
  * halfway from its entry toward its stop-loss or take-profit level.
@@ -73,6 +90,8 @@ export interface PositionSummary {
   /** Unix ms when the summary was generated */
   generatedAt: number;
   openPositions: OpenPositionSummary[];
+  /** Pending (unfilled) STOP/entry orders, one line each in the summary. */
+  pendingOrders: PendingOrderSummary[];
   account: AccountSnapshot;
 }
 
@@ -287,6 +306,19 @@ export class PositionSummaryMonitor {
         };
       });
 
+      // Pending open (STOP) orders — fetched from the futures API, filtered to
+      // entry-side orders. Failure to fetch degrades gracefully (empty list).
+      let pendingOrders: PendingOrderSummary[] = [];
+      try {
+        const ores = await this.client.getOpenOrders();
+        pendingOrders = this.extractPendingOrders(ores);
+      } catch (error) {
+        this.logger.debug(
+          "⚠️ Could not fetch open orders for summary:",
+          error instanceof Error ? error.message : error
+        );
+      }
+
       let account: AccountSnapshot;
       try {
         const asset = await this.client.getAccountAsset(this.baseCurrency);
@@ -313,11 +345,13 @@ export class PositionSummaryMonitor {
         intervalHours: this.intervalMs / 3600000,
         generatedAt: Date.now(),
         openPositions,
+        pendingOrders,
         account,
       };
 
       this.logger.info(
-        `📊 Emitting position summary: ${openPositions.length} open position(s)`
+        `📊 Emitting position summary: ${openPositions.length} open position(s), ` +
+          `${pendingOrders.length} pending order(s)`
       );
       this.onSummary(summary);
     } catch (error) {
@@ -329,6 +363,47 @@ export class PositionSummaryMonitor {
   }
 
   // ── Alert helpers ─────────────────────────────────────────────────
+
+  /**
+   * Parse the current-orders response into a list of pending STOP/entry
+   * orders. Tolerates several response envelopes (`data` as array, or under
+   * `currentOrders` / `list` / `orders`) and keeps only open-*entry* orders
+   * (side 1 or 3) — i.e. the pending STOPs, not SL/TP closes.
+   */
+  private extractPendingOrders(res: any): PendingOrderSummary[] {
+    const raw = res?.data;
+    let list: any[] = [];
+    if (Array.isArray(raw)) list = raw;
+    else if (Array.isArray(raw?.currentOrders)) list = raw.currentOrders;
+    else if (Array.isArray(raw?.orders)) list = raw.orders;
+    else if (Array.isArray(raw?.list)) list = raw.list;
+
+    const out: PendingOrderSummary[] = [];
+    for (const o of list) {
+      if (!o || typeof o !== "object") continue;
+      const side = Number(o.side);
+      if (side !== 1 && side !== 3) continue; // entry orders only
+
+      const orderId = String(o.orderId ?? o.id ?? "");
+      const symbol = String(o.symbol ?? "");
+      const triggerPrice = toFiniteNumber(o.triggerPrice ?? o.stopPrice);
+      const vol = toFiniteNumber(o.vol);
+      if (!orderId || !symbol || !Number.isFinite(triggerPrice) || !Number.isFinite(vol) || vol <= 0) {
+        continue;
+      }
+
+      out.push({
+        orderId,
+        symbol,
+        side: side as 1 | 3,
+        triggerPrice,
+        vol,
+        leverage: toFiniteNumber(o.leverage) || 0,
+        openType: Number(o.openType) === 2 ? 2 : 1,
+      });
+    }
+    return out;
+  }
 
   /**
    * For each open position with a known SL/TP entry, evaluate whether the

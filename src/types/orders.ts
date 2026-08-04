@@ -118,6 +118,45 @@ export interface SubmitOrderResponse {
   data?: string | number; // Order ID — large ids exceed 2^53 and are returned as exact strings; use String(data)
 }
 
+// ── Current (Open) Orders ───────────────────────────────────────────
+// MEXC endpoint: GET /api/v1/private/order/list/current_orders
+// Returns currently open (unfilled) orders, including pending STOP entries.
+
+export interface CurrentOrder {
+  /** Order ID — large ids exceed 2^53, use String(). */
+  orderId: string | number;
+  symbol: string;
+  /** 1=open long, 2=close short, 3=open short, 4=close long */
+  side: number;
+  /** Order type (5 = market/plan) */
+  type?: number | string;
+  /** Original volume */
+  vol: number | string;
+  /** Filled volume */
+  dealVol?: number | string;
+  /** Limit price (0 for market) */
+  price?: number | string;
+  /** Trigger price for STOP orders (some deployments use `stopPrice`) */
+  triggerPrice?: number | string;
+  stopPrice?: number | string;
+  leverage?: number;
+  openType?: number;
+  status?: number | string;
+  createTime?: number;
+  updateTime?: number;
+}
+
+/**
+ * The response envelope may vary (array, `{ currentOrders }`, `{ list }`),
+ * so `data` is typed loosely and parsed defensively by the consumer.
+ */
+export interface CurrentOrdersResponse {
+  success: boolean;
+  code: number;
+  message?: string;
+  data: any;
+}
+
 // ── Trigger Order (Stop Entry) ────────────────────────────────────
 // MEXC endpoint: POST /api/v1/private/order/trigger/submit
 // Used when a signal specifies an explicit entry price (@ or EP).

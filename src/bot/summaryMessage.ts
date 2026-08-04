@@ -23,9 +23,20 @@ function fmtSigned(n: number, digits = 2): string {
 const DIVIDER = "──────────────";
 
 /**
+ * Shorten a long numeric ID for compact display (e.g. "817027833053397504" →
+ * "…397504"). Returns "—" for empty input.
+ */
+function shortId(id: string, tail = 6): string {
+  if (!id) return "—";
+  if (id.length <= tail + 1) return id;
+  return `…${id.slice(-tail)}`;
+}
+
+/**
  * Build the Telegram message for the periodic position summary.
- * Includes open positions (with current / max / min PNL over the window)
- * and the account balance + equity. HTML format.
+ * Includes open positions (with current / max / min PNL over the window,
+ * plus their position IDs), pending STOP orders (one line each with their
+ * order IDs), and the account balance + equity. HTML format.
  */
 export function formatPositionSummaryMessage(summary: PositionSummary): string {
   const cur = summary.account.currency;
@@ -48,6 +59,21 @@ export function formatPositionSummaryMessage(summary: PositionSummary): string {
       lines.push(`Entry: ${fmt(p.openAvgPrice)}`);
       lines.push(`PNL: <b>${fmtSigned(p.currentPnl)} ${cur}</b>`);
       lines.push(`   max ${fmtSigned(p.maxPnl)} / min ${fmtSigned(p.minPnl)} ${cur}`);
+      lines.push(`🆔 ${p.positionId}`);
+    }
+  }
+  lines.push(``);
+
+  // ── Pending (STOP) orders ────────────────────────────────────────
+  lines.push(`📌 <b>Pending Orders (${summary.pendingOrders.length})</b>`);
+  if (summary.pendingOrders.length === 0) {
+    lines.push(`No pending orders`);
+  } else {
+    for (const o of summary.pendingOrders) {
+      const dir = o.side === 1 ? "LONG" : "SHORT";
+      lines.push(
+        `🟡 ${o.symbol} ${dir} · STOP @ ${fmt(o.triggerPrice)} · ${fmt(o.vol)} · <code>${shortId(o.orderId)}</code>`
+      );
     }
   }
   lines.push(``);

@@ -68,6 +68,7 @@ describe("PositionSummaryMonitor", () => {
     client = {
       getOpenPositions: jest.fn(),
       getAccountAsset: jest.fn(),
+      getOpenOrders: jest.fn().mockResolvedValue({ data: [] }),
     };
   });
 
@@ -335,5 +336,59 @@ describe("PositionSummaryMonitor", () => {
     // position 1 stats were dropped, so no stale max/min carry over
     expect(summary.openPositions[0].maxPnl).toBe(-4);
     expect(summary.openPositions[0].minPnl).toBe(-4);
+  });
+
+  it("includes pending (entry-side) open orders in the summary", async () => {
+    client.getOpenPositions.mockResolvedValue({
+      data: [makePosition({ unRealizedPnl: 1 })],
+    });
+    client.getAccountAsset.mockResolvedValue({
+      data: { availableBalance: 1, equity: 2 },
+    });
+    // current_orders: includes two entry STOPs + a close-side SL order
+    client.getOpenOrders.mockResolvedValue({
+      data: {
+        currentOrders: [
+          { orderId: "817027833053397504", symbol: "TAO_USDT", side: 1, triggerPrice: "187.54", vol: "0.5", openType: 1, leverage: 10 },
+          { orderId: "55", symbol: "ETH_USDT", side: 3, triggerPrice: 3400, vol: 2, openType: 1, leverage: 5 },
+          { orderId: "66", symbol: "ETH_USDT", side: 4, triggerPrice: 3450, vol: 2, openType: 1, leverage: 5 }, // close-side → excluded
+        ],
+      },
+    });
+
+    const monitor = makeMonitor(client, store, onSummary, onAlert);
+    await monitor.sample();
+    await monitor.emitSummary();
+
+    const summary: PositionSummary = onSummary.mock.calls[0][0];
+    expect(summary.pendingOrders).toHaveLength(2);
+    expect(summary.pendingOrders[0]).toMatchObject({
+      orderId: "817027833053397504",
+      symbol: "TAO_USDT",
+      side: 1,
+      triggerPrice: 187.54,
+      vol: 0.5,
+      leverage: 10,
+    });
+    expect(summary.pendingOrders[1].symbol).toBe("ETH_USDT");
+    expect(summary.pendingOrders[1].side).toBe(3);
+  });
+
+  it("degrades gracefully when the open-orders fetch fails", async () => {
+    client.getOpenPositions.mockResolvedValue({
+      data: [makePosition({ unRealizedPnl: 1 })],
+    });
+    client.getAccountAsset.mockResolvedValue({
+      data: { availableBalance: 1, equity: 2 },
+    });
+    client.getOpenOrders.mockRejectedValue(new Error("rate limited"));
+
+    const monitor = makeMonitor(client, store, onSummary, onAlert);
+    await monitor.sample();
+    await monitor.emitSummary();
+
+    const summary: PositionSummary = onSummary.mock.calls[0][0];
+    expect(summary.pendingOrders).toEqual([]);
+    expect(summary.openPositions).toHaveLength(1); // summary still emitted
   });
 });

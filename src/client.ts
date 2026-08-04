@@ -26,6 +26,7 @@ import {
   SubmitPlanOrderRequest,
   SubmitPlanOrderResponse,
   GetOrderResponse,
+  CurrentOrdersResponse,
 } from "./types/orders";
 import {
   RiskLimit,
@@ -479,6 +480,23 @@ export class MexcFuturesSDK {
       this.logger.debug("🔍 Plan order response:", response.data);
       return response.data;
     } catch (error) {
+      throw error;
+    }
+  }
+
+  /**
+   * Get currently open (unfilled) orders, including pending STOP entries.
+   * @param symbol Optional contract symbol to filter by
+   */
+  async getOpenOrders(symbol?: string): Promise<CurrentOrdersResponse> {
+    try {
+      const params = symbol ? { symbol } : {};
+      const response = await this.httpClient.get(ENDPOINTS.CURRENT_ORDERS, {
+        params,
+      });
+      return response.data;
+    } catch (error) {
+      // Error is already logged by the interceptor with user-friendly message
       throw error;
     }
   }
