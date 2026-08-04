@@ -56,6 +56,12 @@ export class SignalBot {
       secretKey: config.mexcSecretKey || undefined,
       authToken: config.mexcAuthToken || undefined,
       logLevel: config.logLevel,
+      // Token-bucket rate limiter: bursts fire ASAP, overflow is spaced to stay
+      // within MEXC's request limits (avoids code 513 on multi-order signals).
+      rateLimit: {
+        capacity: config.orderRateCapacity,
+        intervalMs: config.orderRateIntervalMs,
+      },
     });
 
     // Initialize subsystems

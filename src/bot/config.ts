@@ -69,6 +69,13 @@ export function loadConfig(): BotConfig {
   const summaryIntervalHours = parseFloat(env.SUMMARY_INTERVAL_HOURS || "8");
   const summaryWindowHours = parseFloat(env.SUMMARY_WINDOW_HOURS || "4");
 
+  // Token-bucket API rate limiting. capacity = max requests fired in an
+  // immediate burst (ASAP); intervalMs = spacing between requests after the
+  // burst is spent (sustained ≈ 1000/intervalMs req/s). Prevents MEXC code 513
+  // when one signal submits several orders + TPs back-to-back.
+  const orderRateCapacity = parseInt(env.ORDER_RATE_CAPACITY || "3", 10);
+  const orderRateIntervalMs = parseInt(env.ORDER_RATE_INTERVAL_MS || "200", 10);
+
   const config: BotConfig = {
     mexcApiKey,
     mexcSecretKey,
@@ -93,6 +100,8 @@ export function loadConfig(): BotConfig {
     summaryNotificationChannel,
     summaryIntervalHours,
     summaryWindowHours,
+    orderRateCapacity,
+    orderRateIntervalMs,
   };
 
   validate(config);
@@ -151,6 +160,16 @@ function validate(config: BotConfig): void {
   if (config.summaryWindowHours < 1) {
     throw new Error(
       `SUMMARY_WINDOW_HOURS must be >= 1, got ${config.summaryWindowHours}`
+    );
+  }
+  if (config.orderRateCapacity < 1) {
+    throw new Error(
+      `ORDER_RATE_CAPACITY must be >= 1, got ${config.orderRateCapacity}`
+    );
+  }
+  if (config.orderRateIntervalMs < 10) {
+    throw new Error(
+      `ORDER_RATE_INTERVAL_MS must be >= 10, got ${config.orderRateIntervalMs}`
     );
   }
 }

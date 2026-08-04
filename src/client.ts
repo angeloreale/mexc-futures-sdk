@@ -2,6 +2,7 @@ import axios, { AxiosInstance } from "axios";
 import { ENDPOINTS } from "./utils/constants";
 import { generateHeaders } from "./utils/headers";
 import { Logger, LogLevelString } from "./utils/logger";
+import { TokenBucket, TokenBucketOptions } from "./utils/rateLimiter";
 import {
   MexcValidationError,
   MexcApiError,
@@ -65,16 +66,34 @@ export interface MexcFuturesSDKConfig {
   userAgent?: string;
   customHeaders?: Record<string, string>;
   logLevel?: LogLevelString;
+  /** Optional token-bucket rate limiter applied to EVERY API request.
+   * Set this to throttle bursts (e.g. several order/TP submissions from one
+   * signal) so the SDK stays within MEXC's request limits instead of getting
+   * rejected with code 513. Requests fire immediately during bursts and are
+   * only spaced out once the configured budget is exhausted. */
+  rateLimit?: TokenBucketOptions;
 }
 
 export class MexcFuturesSDK {
   private httpClient: AxiosInstance;
   private config: MexcFuturesSDKConfig;
   private logger: Logger;
+  private rateLimiter: TokenBucket | null = null;
 
   constructor(config: MexcFuturesSDKConfig) {
     this.config = config;
     this.logger = new Logger(config.logLevel);
+
+    // Optional token-bucket rate limiter — gates every HTTP request so bursts
+    // (e.g. multiple orders + TPs from a single signal) never exceed MEXC's
+    // request limit. Bursts fire ASAP; only the overflow is spaced out.
+    if (config.rateLimit) {
+      this.rateLimiter = new TokenBucket({
+        ...config.rateLimit,
+        logger: this.logger,
+        name: "mexc-api",
+      });
+    }
 
     if (!config.apiKey && !config.authToken) {
       throw new Error(
@@ -109,8 +128,24 @@ export class MexcFuturesSDK {
     });
 
     // Request interceptor — inject fresh auth headers, start timer & log outgoing request
-    this.httpClient.interceptors.request.use((requestConfig) => {
-      // Attach start time so the response interceptor can compute duration
+    this.httpClient.interceptors.request.use(async (requestConfig) => {
+      // ── Rate-limit gate ─────────────────────────────────────────────
+      // Token-bucket limiter: acquire a slot before every request. Fires
+      // immediately during bursts (ASAP) and only delays once the configured
+      // budget is exhausted — the minimum spacing needed to avoid MEXC 513.
+      if (this.rateLimiter) {
+        const started = Date.now();
+        await this.rateLimiter.acquire();
+        const waited = Date.now() - started;
+        if (waited > 0) {
+          this.logger.info(
+            `⏳ MEXC rate-limit: throttled ${(requestConfig.method ?? "GET").toUpperCase()} ${requestConfig.url ?? ""} (waited ${waited}ms)`
+          );
+        }
+      }
+
+      // Attach start time (after any throttling) so the response interceptor's
+      // duration reflects actual network time, not the rate-limit wait.
       (requestConfig as any)._startTime = Date.now();
 
       const method = (requestConfig.method ?? "GET").toUpperCase();

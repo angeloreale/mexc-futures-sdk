@@ -159,6 +159,27 @@ All settings are environment variables. Copy `.env.example` and fill in:
 | `SUMMARY_NOTIFICATION_CHANNEL` | *(empty)* | Channel/chat ID for the periodic position summary. Empty = reuse `PNL_NOTIFICATION_CHANNEL` |
 | `SUMMARY_INTERVAL_HOURS` | `8` | How often (h) the position summary is sent |
 | `SUMMARY_WINDOW_HOURS` | `4` | Trailing window (h) for the PNL max/min stats shown in the summary |
+| **API Rate Limiting** | | |
+| `ORDER_RATE_CAPACITY` | `3` | Token-bucket burst capacity — max MEXC API requests fired immediately before throttling |
+| `ORDER_RATE_INTERVAL_MS` | `200` | Spacing (ms) between requests after the burst is spent (sustained ≈ 5 req/s) |
+
+### ⏳ API Rate Limiting
+
+Signals with multiple orders + TPs (e.g. 2 orders × 3 TPs = 6 order submissions, plus the
+pre-order ticker/equity/position calls) can fire a burst that exceeds MEXC's request limit,
+causing `513` rejections. The bot applies a **token-bucket rate limiter to every MEXC API call**
+that:
+
+- **Bursts first** — up to `ORDER_RATE_CAPACITY` requests are sent back-to-back with **zero**
+  delay, so normal signals are placed as fast as possible (no artificial sleep).
+- **Then spaces out** — once the burst is spent, excess requests are queued FIFO and released
+  one every `ORDER_RATE_INTERVAL_MS`, keeping the sustained rate safe.
+
+For the default `ORDER_RATE_CAPACITY=3` / `ORDER_RATE_INTERVAL_MS=200`, a 6-order signal
+places 3 orders immediately and the rest at ~200ms intervals — all done in under a second,
+without exhausting the API. If you still see `513` errors, lower `ORDER_RATE_CAPACITY`
+to `1`–`2`; if you want more burst headroom, raise it. Throttling events are logged as
+`⏳ MEXC rate-limit: throttled ... (waited Xms)`.
 
 ### Running Locally
 

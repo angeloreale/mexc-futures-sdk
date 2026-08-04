@@ -29,6 +29,8 @@ const defaultConfig: BotConfig = {
   summaryNotificationChannel: "",
   summaryIntervalHours: 8,
   summaryWindowHours: 4,
+  orderRateCapacity: 3,
+  orderRateIntervalMs: 200,
 };
 
 function makeContract(overrides?: Partial<ContractDetail>): ContractDetail {
