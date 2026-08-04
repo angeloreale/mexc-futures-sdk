@@ -82,7 +82,6 @@ describe("PositionSummaryMonitor", () => {
     client = {
       getOpenPositions: jest.fn(),
       getAccountAsset: jest.fn(),
-      getOpenOrders: jest.fn().mockResolvedValue({ data: [] }),
       getPlanOrders: jest.fn().mockResolvedValue({ data: [] }),
       getStopOrders: jest.fn().mockResolvedValue({ data: [] }),
     };

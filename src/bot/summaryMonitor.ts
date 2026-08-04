@@ -159,6 +159,8 @@ export class PositionSummaryMonitor {
   /** Tracks which positions already alerted per target, to avoid repeat alerts. */
   private alerted = new Map<string, { sl: boolean; tp: boolean }>();
   private pollLogged = false;
+  private pendingOrdersCache: { orders: PendingOrderSummary[]; ts: number } | null = null;
+  private readonly PENDING_CACHE_TTL_MS = 30_000; // cache pending orders for 30s to avoid rate limits
 
   constructor(opts: PositionSummaryMonitorOptions) {
     this.client = opts.client;
@@ -289,6 +291,11 @@ export class PositionSummaryMonitor {
    * Assemble and emit the summary. Public so tests can drive it directly.
    */
   async emitSummary(): Promise<void> {
+    if (!this.sampleTimer) {
+      this.logger.debug(
+        "📊 Summary requested but monitor not started — polling timers are not running"
+      );
+    }
     try {
       // Fresh open positions so the summary always reflects the current state,
       // merging in the tracked PNL stats (max/min) where available.
@@ -490,25 +497,32 @@ export class PositionSummaryMonitor {
   // ── Alert helpers ─────────────────────────────────────────────────
 
   /**
-   * Fetch pending orders from three documented sources, merge, dedupe,
-   * and log per-source status at DEBUG. Degrades gracefully — any
-   * failing source is silently omitted.
+   * Fetch pending orders from the documented plan/stop-order endpoints with a
+   * 30-second cache so rapid CHECK POSITIONS commands don't rate-limit the API.
+   * Each source fails independently; the cache is not populated on complete failure.
    */
   private async fetchPendingOrders(): Promise<PendingOrderSummary[]> {
+    const now = Date.now();
+    if (
+      this.pendingOrdersCache &&
+      now - this.pendingOrdersCache.ts < this.PENDING_CACHE_TTL_MS
+    ) {
+      this.logger.debug("📦 Using cached pending orders");
+      return this.pendingOrdersCache.orders;
+    }
+
     const results = await Promise.allSettled([
-      this.client.getOpenOrders(),
       this.client.getPlanOrders(undefined, 1), // 1 = untriggered
       this.client.getStopOrders(undefined, 0), // 0 = uncompleted
     ]);
 
     const extracted = [
-      results[0].status === "fulfilled" ? this.extractOpenOrders(results[0].value) : [],
-      results[1].status === "fulfilled" ? this.extractPlanOrders(results[1].value) : [],
-      results[2].status === "fulfilled" ? this.extractStopOrders(results[2].value) : [],
+      results[0].status === "fulfilled" ? this.extractPlanOrders(results[0].value) : [],
+      results[1].status === "fulfilled" ? this.extractStopOrders(results[1].value) : [],
     ];
 
     if (this.logger.isDebugEnabled()) {
-      const src = ["open_orders", "planorder", "stoporder"];
+      const src = ["planorder", "stoporder"];
       const status = results.map((r, i) => {
         if (r.status === "fulfilled") return `${src[i]}:ok(${extracted[i].length})`;
         const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
@@ -527,69 +541,7 @@ export class PositionSummaryMonitor {
         out.push(p);
       }
     }
-    return out;
-  }
-
-  /**
-   * Parse the documented open-orders response (`order/list/open_orders`) into
-   * a list of pending orders. Classifies into TP/SL (carries stopLossPrice /
-   * takeProfitPrice) or STOP/entry (side 1/3). Tolerates several envelopes.
-   */
-  private extractOpenOrders(res: any): PendingOrderSummary[] {
-    const list = this.asList(res?.data);
-    const out: PendingOrderSummary[] = [];
-    for (const o of list) {
-      if (!o || typeof o !== "object") continue;
-      const orderId = String(o.orderId ?? o.id ?? "");
-      const symbol = String(o.symbol ?? "");
-      const vol = toFiniteNumber(o.vol);
-      const side = Number(o.side);
-      if (!orderId || !symbol || vol <= 0) continue;
-
-      const stopLossPrice = toFiniteNumber(o.stopLossPrice);
-      const takeProfitPrice = toFiniteNumber(o.takeProfitPrice);
-
-      // TP/SL order (close delegate): carries SL and/or TP prices.
-      if (Number.isFinite(stopLossPrice) || Number.isFinite(takeProfitPrice)) {
-        // side 2 = close short → position was short; side 4 = close long → position was long
-        const positionType = side === 2 ? 2 : 1;
-        out.push({
-          orderId,
-          symbol,
-          side: (side === 2 ? 2 : 4) as 1 | 2 | 3 | 4,
-          kind: "TP_SL",
-          triggerType: 1,
-          triggerPrice: NaN,
-          takeProfitPrice,
-          stopLossPrice,
-          positionType,
-          vol,
-          leverage: toFiniteNumber(o.leverage) || 0,
-          openType: Number(o.openType) === 2 ? 2 : 1,
-        });
-        continue;
-      }
-
-      // Open-side entry (trigger/limit).
-      if (side === 1 || side === 3) {
-        const price = toFiniteNumber(o.price);
-        if (!Number.isFinite(price)) continue;
-        out.push({
-          orderId,
-          symbol,
-          side: side as 1 | 3,
-          kind: "STOP",
-          triggerType: 1,
-          triggerPrice: price,
-          takeProfitPrice: NaN,
-          stopLossPrice: NaN,
-          positionType: side === 1 ? 1 : 2,
-          vol,
-          leverage: toFiniteNumber(o.leverage) || 0,
-          openType: Number(o.openType) === 2 ? 2 : 1,
-        });
-      }
-    }
+    this.pendingOrdersCache = { orders: out, ts: now };
     return out;
   }
 
