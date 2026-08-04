@@ -622,7 +622,7 @@ export class PositionSummaryMonitor {
     }
 
     const results = await Promise.allSettled([
-      this.client.getPlanOrders(undefined, 1), // 1 = untriggered
+      this.client.getPlanOrders(undefined, "1"), // states="1" = untriggered
       this.client.getStopOrders(undefined, 0, 1), // is_finished=0 (uncompleted), state=1 (untriggered)
     ]);
 
@@ -688,6 +688,10 @@ export class PositionSummaryMonitor {
         continue;
       }
 
+      // Plan orders may carry attached TP/SL prices
+      const stopLossPrice = toFiniteNumber(o.stopLossPrice);
+      const takeProfitPrice = toFiniteNumber(o.takeProfitPrice);
+
       out.push({
         orderId,
         symbol,
@@ -695,8 +699,8 @@ export class PositionSummaryMonitor {
         kind: "STOP",
         triggerType,
         triggerPrice,
-        takeProfitPrice: NaN,
-        stopLossPrice: NaN,
+        takeProfitPrice: Number.isFinite(takeProfitPrice) ? takeProfitPrice : NaN,
+        stopLossPrice: Number.isFinite(stopLossPrice) ? stopLossPrice : NaN,
         positionType: side === 1 ? 1 : 2,
         vol,
         leverage: toFiniteNumber(o.leverage) || 0,

@@ -121,7 +121,8 @@ export interface SubmitOrderResponse {
 // ── Trigger (Plan) Order List ──────────────────────────────────────
 // MEXC endpoint: GET /api/v1/private/planorder/list/orders
 // Returns plan/trigger orders (stop entries). Filter with `states`:
-// 1 = untriggered, 2 = cancelled, 3 = executed, 4 = invalid, 5 = execution failed.
+// "1" = untriggered, "2" = cancelled, "3" = executed, "4" = invalid,
+// "5" = execution failed. Multiple states separated by comma.
 
 export interface PlanOrder {
   /** Trigger order ID — large ids exceed 2^53, use String(). */
@@ -129,7 +130,7 @@ export interface PlanOrder {
   symbol: string;
   /** 1=open long, 2=close short, 3=open short, 4=close long */
   side: number;
-  /** 1=more than or equal, 2=less than or equal */
+  /** 1=more than or equal (>=), 2=less than or equal (<=) */
   triggerType: number;
   /** Price that triggers the order */
   triggerPrice: number | string;
@@ -145,6 +146,18 @@ export interface PlanOrder {
   orderType?: number;
   /** Order ID on successful execution (0 while untriggered) */
   orderId?: string | number;
+  /** Stop-loss reference price type: 1=latest, 2=fair, 3=index */
+  lossTrend?: number;
+  /** Take-profit reference price type: 1=latest, 2=fair, 3=index */
+  profitTrend?: number;
+  /** Stop-loss price attached to the plan order */
+  stopLossPrice?: number | string;
+  /** Take-profit price attached to the plan order */
+  takeProfitPrice?: number | string;
+  errorCode?: number;
+  priceProtect?: number;
+  positionMode?: number;
+  reduceOnly?: boolean;
   createTime?: number;
   updateTime?: number;
 }

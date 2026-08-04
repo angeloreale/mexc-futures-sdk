@@ -488,14 +488,25 @@ export class MexcFuturesSDK {
   /**
    * Get the plan/trigger order list (stop entries).
    * @param symbol Optional contract symbol
-   * @param states Optional order state filter (1=untriggered, 2=cancelled, 3=executed, 4=invalid, 5=execution failed)
+   * @param states Optional order state filter as comma-separated string (e.g. "1" or "1,2,3").
+   *               1=untriggered, 2=cancelled, 3=executed, 4=invalid, 5=execution failed
+   * @param startTime Optional start time (Unix ms), defaults to 90 days ago
+   * @param endTime Optional end time (Unix ms), defaults to now
    */
   async getPlanOrders(
     symbol?: string,
-    states?: number
+    states?: string,
+    startTime?: number,
+    endTime?: number
   ): Promise<PlanOrderListResponse> {
     try {
-      const params: Record<string, string | number> = { page_num: 1, page_size: 100 };
+      const now = Date.now();
+      const params: Record<string, string | number> = {
+        page_num: 1,
+        page_size: 100,
+        start_time: startTime ?? (now - 90 * 86400_000),
+        end_time: endTime ?? now,
+      };
       if (symbol) params.symbol = symbol;
       if (states !== undefined) params.states = states;
       const response = await this.httpClient.get(ENDPOINTS.PLAN_ORDER_LIST, {
