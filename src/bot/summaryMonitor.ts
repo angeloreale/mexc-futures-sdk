@@ -332,11 +332,6 @@ export class PositionSummaryMonitor {
    * Assemble and emit the summary. Public so tests can drive it directly.
    */
   async emitSummary(): Promise<void> {
-    if (!this.sampleTimer) {
-      this.logger.debug(
-        "📊 Summary requested but monitor not started — polling timers are not running"
-      );
-    }
     try {
       // Fresh open positions so the summary always reflects the current state,
       // merging in the tracked PNL stats (max/min) where available.

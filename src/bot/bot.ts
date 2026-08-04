@@ -195,8 +195,11 @@ export class SignalBot {
       );
     }
 
-    // Launch bot (long-polling)
-    await this.telegram.launch();
+    // Launch Telegram bot (long-polling). launch() never resolves while
+    // polling is active, so we fire-and-forget and log once polling begins.
+    void this.telegram.launch().then(() => {
+      this.logger.info("✅ Telegram polling stopped");
+    });
     this.logger.info("✅ Bot is running and listening for signals");
   }
 
