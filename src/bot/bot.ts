@@ -8,6 +8,12 @@ import { ContractResolver } from "./resolver";
 import { calculatePositionSize } from "./sizer";
 import { TradeExecutor } from "./executor";
 import { BotState } from "./state";
+import {
+  PositionClosureMonitor,
+  AccountSnapshot,
+  ClosedPositionInfo,
+} from "./pnlMonitor";
+import { formatPositionClosedMessage } from "./pnlMessage";
 
 /**
  * Main Telegram Signal Bot.
@@ -22,6 +28,8 @@ export class SignalBot {
   private resolver: ContractResolver;
   private executor: TradeExecutor;
   private state: BotState;
+  /** Polls MEXC for closed positions and sends PNL notifications (null when disabled). */
+  private pnlMonitor: PositionClosureMonitor | null = null;
   /** Cache account equity for 10s to avoid rate limits on rapid signals. */
   private equityCache: { equity: number; ts: number } | null = null;
   private readonly EQUITY_CACHE_TTL_MS = 10_000;
@@ -46,6 +54,18 @@ export class SignalBot {
     this.resolver = new ContractResolver(this.mexcClient, this.logger);
     this.executor = new TradeExecutor(this.mexcClient, config, this.logger);
     this.state = new BotState(config.stateFilePath, this.logger);
+
+    // Position-close PNL notifications (only when a channel is configured)
+    if (config.pnlNotificationChannel) {
+      this.pnlMonitor = new PositionClosureMonitor({
+        client: this.mexcClient,
+        logger: this.logger,
+        baseCurrency: config.baseCurrency,
+        intervalSeconds: config.positionMonitorIntervalSeconds,
+        onClose: (info, account) =>
+          this.sendPositionClosedNotification(info, account),
+      });
+    }
 
     // Initialize Telegram bot
     this.telegram = new Telegraf(config.telegramBotToken);
@@ -96,6 +116,7 @@ export class SignalBot {
     // Graceful shutdown
     const shutdown = async (signal: string) => {
       this.logger.info(`\n🛑 Received ${signal} — shutting down...`);
+      this.pnlMonitor?.stop();
       this.telegram.stop(signal);
       await this.logger.close();
       process.exit(0);
@@ -106,6 +127,39 @@ export class SignalBot {
     // Launch bot (long-polling)
     await this.telegram.launch();
     this.logger.info("✅ Bot is running and listening for signals");
+
+    // Start position-close PNL notifications (after Telegram is live so sends work)
+    if (this.pnlMonitor) {
+      this.pnlMonitor.start();
+      this.logger.info(
+        `📨 PNL notifications → ${this.config.pnlNotificationChannel}`
+      );
+    }
+  }
+
+  /**
+   * Send the position-closed PNL notification to the configured channel.
+   */
+  private async sendPositionClosedNotification(
+    info: ClosedPositionInfo,
+    account: AccountSnapshot
+  ): Promise<void> {
+    const text = formatPositionClosedMessage(info, account);
+    try {
+      await this.telegram.telegram.sendMessage(
+        this.config.pnlNotificationChannel,
+        text,
+        { parse_mode: "HTML" }
+      );
+      this.logger.info(
+        `📨 PNL notification sent to ${this.config.pnlNotificationChannel}`
+      );
+    } catch (error) {
+      this.logger.error(
+        "❌ Failed to send PNL notification:",
+        error instanceof Error ? error.message : error
+      );
+    }
   }
 
   /**
