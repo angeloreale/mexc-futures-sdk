@@ -158,12 +158,21 @@ export class MexcFuturesSDK {
       // getOpenPositions, etc.) relied on those stale defaults, causing MEXC to reject
       // them with code 513 (rate-limit / invalid signature).
       // Now we generate fresh headers right before each request. The body (requestConfig.data)
-      // is passed so POST requests are body-signed; GET requests get timestamp-only signing.
+      // is passed so POST requests are body-signed; GET/DELETE requests sign the sorted
+      // query-string of business params (requestConfig.params) per the MEXC v1 rules.
       const bodyForSigning =
         requestConfig.data && typeof requestConfig.data === "string"
           ? requestConfig.data
           : requestConfig.data;
-      const freshHeaders = generateHeaders(this.getAuthOptions(), true, bodyForSigning);
+      const queryParams = requestConfig.params as
+        | Record<string, string | number | undefined>
+        | undefined;
+      const freshHeaders = generateHeaders(
+        this.getAuthOptions(),
+        true,
+        bodyForSigning,
+        queryParams
+      );
       Object.assign(requestConfig.headers, freshHeaders);
 
       const url = `${requestConfig.baseURL ?? ""}${requestConfig.url ?? ""}`;

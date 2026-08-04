@@ -37,11 +37,18 @@ function mexcCrypto(key: string, obj: any): { time: string; sign: string } {
  * Supports two authentication modes:
  * 1. API Key + Secret Key (preferred): uses HMAC-SHA256 signing
  * 2. Browser WEB token (legacy): uses MD5-based signing
+ *
+ * Signature rules (MEXC Futures API v1):
+ *   - POST:   sign `apiKey + timestamp + jsonBody`
+ *   - GET/DELETE: sign `apiKey + timestamp + sortedQueryString`
+ *     (business params sorted in dictionary order, joined with '&';
+ *      use empty string when there are no params)
  */
 export function generateHeaders(
   options: SDKOptions,
   includeAuth: boolean = true,
-  requestBody?: any
+  requestBody?: any,
+  queryParams?: Record<string, string | number | undefined>
 ): Record<string, string> {
   const headers: Record<string, string> = {
     ...DEFAULT_HEADERS,
@@ -62,31 +69,29 @@ export function generateHeaders(
     if (options.apiKey && options.secretKey) {
       // --- API Key + Secret Key auth (HMAC-SHA256) ---
       headers["ApiKey"] = options.apiKey;
+      const dateNow = String(Date.now());
 
+      let signPayload: string;
       if (requestBody) {
-        const dateNow = String(Date.now());
+        // POST: sign the JSON body (camelCase keys, no sorting)
         const bodyStr = typeof requestBody === "string"
           ? requestBody
           : JSON.stringify(requestBody);
-        const signPayload = options.apiKey + dateNow + bodyStr;
-        const signature = crypto
-          .createHmac("sha256", options.secretKey)
-          .update(signPayload)
-          .digest("hex");
-
-        headers["Request-Time"] = dateNow;
-        headers["Signature"] = signature;
+        signPayload = options.apiKey + dateNow + bodyStr;
       } else {
-        // For GET requests, sign with just apiKey + timestamp
-        const dateNow = String(Date.now());
-        const signature = crypto
-          .createHmac("sha256", options.secretKey)
-          .update(options.apiKey + dateNow)
-          .digest("hex");
-
-        headers["Request-Time"] = dateNow;
-        headers["Signature"] = signature;
+        // GET/DELETE: sign the sorted query-string of business params
+        // (empty string when there are no params)
+        const queryStr = buildQueryString(queryParams);
+        signPayload = options.apiKey + dateNow + queryStr;
       }
+
+      const signature = crypto
+        .createHmac("sha256", options.secretKey)
+        .update(signPayload)
+        .digest("hex");
+
+      headers["Request-Time"] = dateNow;
+      headers["Signature"] = signature;
     } else if (options.authToken) {
       // --- Legacy browser WEB token auth (MD5-based) ---
       headers["authorization"] = options.authToken;
@@ -102,4 +107,22 @@ export function generateHeaders(
   }
 
   return headers;
+}
+
+/**
+ * Build the MEXC GET/DELETE signature parameter string:
+ * business params sorted in dictionary order and joined with '&'.
+ * null/undefined values are omitted. Returns "" when there are no params.
+ */
+export function buildQueryString(
+  params?: Record<string, string | number | undefined>
+): string {
+  if (!params) return "";
+  const pairs: string[] = [];
+  for (const key of Object.keys(params).sort()) {
+    const value = params[key];
+    if (value === undefined || value === null || value === "") continue;
+    pairs.push(`${key}=${value}`);
+  }
+  return pairs.join("&");
 }

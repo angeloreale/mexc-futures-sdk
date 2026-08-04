@@ -679,19 +679,30 @@ export class PositionSummaryMonitor {
       .catch((e) => ({ status: "rejected" as const, reason: e }));
 
     const results = [planResult, stopResult] as const;
+    const src = ["planorder", "stoporder"] as const;
 
     const extracted = [
       results[0].status === "fulfilled" ? this.extractPlanOrders(results[0].value) : [],
       results[1].status === "fulfilled" ? this.extractStopOrders(results[1].value) : [],
     ];
 
-    // Log any failures at INFO level so operators can see them
-    const src = ["planorder", "stoporder"] as const;
+    // Surface failures loudly so an auth/API error is never masked as
+    // "no pending orders".
+    const failures: string[] = [];
     for (let i = 0; i < results.length; i++) {
       const r = results[i];
       if (r.status === "rejected") {
         const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
-        this.logger.warn(`⚠️ Failed to fetch ${src[i]} pending orders: ${msg}`);
+        failures.push(`${src[i]} (${msg})`);
+      }
+    }
+    if (failures.length === results.length) {
+      this.logger.error(
+        `❌ All pending-order sources failed — pending orders likely incomplete. ${failures.join(" · ")}`
+      );
+    } else {
+      for (const f of failures) {
+        this.logger.warn(`⚠️ Failed to fetch ${f}`);
       }
     }
 
