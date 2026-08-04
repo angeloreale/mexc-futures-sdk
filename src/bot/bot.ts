@@ -184,6 +184,17 @@ export class SignalBot {
         `📊 Position summary → ${this.config.summaryNotificationChannel} ` +
           `(every ${this.config.summaryIntervalHours}h, window ${this.config.summaryWindowHours}h)`
       );
+
+      // Emit an initial summary snapshot to both console and Telegram.
+      try {
+        await this.summaryMonitor.emitSummary();
+        this.logger.info("📊 Initial summary snapshot emitted");
+      } catch (error) {
+        this.logger.error(
+          "❌ Failed to emit initial summary:",
+          error instanceof Error ? error.message : error
+        );
+      }
     }
   }
 
