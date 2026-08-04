@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { MexcFuturesSDK } from "../client";
 import { Position } from "../types/account";
+import { PlanOrderListResponse, StopOrderListResponse } from "../types/orders";
 import { Logger } from "../utils/logger";
 import { toFiniteNumber } from "../utils/numbers";
 import { AccountSnapshot } from "./pnlMonitor";
@@ -135,6 +136,12 @@ export interface PositionSummaryMonitorOptions {
    * duplicate open-positions API call.
    */
   onSample?: (positions: Position[]) => void;
+  /**
+   * Minimum spacing (ms) between each API call during summary generation.
+   * Default 0 (no extra spacing — relies on the SDK's token-bucket rate limiter).
+   * Set to ORDER_RATE_INTERVAL_MS to guarantee each request is spaced.
+   */
+  requestSpacingMs?: number;
 }
 
 /**
@@ -159,6 +166,9 @@ export class PositionSummaryMonitor {
   private slTpRetentionMs: number;
   private onAlert: OnPositionAlert;
   private onSample: ((positions: Position[]) => void) | undefined;
+  private requestSpacingMs: number;
+  /** Timestamp (ms) of the last API call made by emitSummary / fetchPendingOrders. */
+  private lastSummaryApiCall = 0;
   private stats = new Map<string, PositionStats>();
   private sampleTimer: NodeJS.Timeout | null = null;
   private summaryTimer: NodeJS.Timeout | null = null;
@@ -181,6 +191,7 @@ export class PositionSummaryMonitor {
     this.slTpStore = opts.slTpStore;
     this.onAlert = opts.onAlert;
     this.onSample = opts.onSample;
+    this.requestSpacingMs = Math.max(0, opts.requestSpacingMs ?? 0);
     this.slTpRetentionMs = Math.max(opts.slTpRetentionDays, 1) * 86400_000;
     this.loadStats();
   }
@@ -351,6 +362,9 @@ export class PositionSummaryMonitor {
       const positions: Position[] = Array.isArray(res.data) ? res.data : [];
       const open = positions.filter((p) => p.state !== 3 && p.holdVol > 0);
 
+      // Space requests to avoid MEXC rate limits on the summary path.
+      await this.spaceRequest();
+
       const openPositions: OpenPositionSummary[] = open.map((p) => {
         const id = String(p.positionId);
         const st = this.stats.get(id);
@@ -393,6 +407,9 @@ export class PositionSummaryMonitor {
       // planorder/stoporder lists as fallbacks, merges and dedupes. Each
       // source fails independently and degrades gracefully.
       const pendingOrders = await this.fetchPendingOrders();
+
+      // Space before the next API call.
+      await this.spaceRequest();
 
       let account: AccountSnapshot;
       try {
@@ -604,12 +621,30 @@ export class PositionSummaryMonitor {
     return d.toISOString().slice(0, 10);
   }
 
+  /**
+   * Ensure a minimum spacing between API calls during summary generation.
+   * Uses `requestSpacingMs` (typically ORDER_RATE_INTERVAL_MS) to guarantee
+   * each request is separated by at least that interval, preventing MEXC
+   * rate-limit rejections even during bursts.
+   */
+  private async spaceRequest(): Promise<void> {
+    if (this.requestSpacingMs <= 0) return;
+    const now = Date.now();
+    const elapsed = now - this.lastSummaryApiCall;
+    if (elapsed < this.requestSpacingMs) {
+      const wait = this.requestSpacingMs - elapsed;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+    this.lastSummaryApiCall = Date.now();
+  }
+
   // ── Alert helpers ─────────────────────────────────────────────────
 
   /**
    * Fetch pending orders from the documented plan/stop-order endpoints with a
    * 30-second cache so rapid CHECK POSITIONS commands don't rate-limit the API.
-   * Each source fails independently; the cache is not populated on complete failure.
+   * Each source fails independently; requests are made sequentially to avoid
+   * burst rate-limiting from MEXC.
    */
   private async fetchPendingOrders(): Promise<PendingOrderSummary[]> {
     const now = Date.now();
@@ -621,10 +656,21 @@ export class PositionSummaryMonitor {
       return this.pendingOrdersCache.orders;
     }
 
-    const results = await Promise.allSettled([
-      this.client.getPlanOrders(undefined, "1"), // states="1" = untriggered
-      this.client.getStopOrders(undefined, 0, 1), // is_finished=0 (uncompleted), state=1 (untriggered)
-    ]);
+    // Fetch sequentially (not Promise.allSettled) — MEXC rate-limits burst
+    // requests, even when within the token-bucket capacity.
+    type Settled<T> = { status: "fulfilled"; value: T } | { status: "rejected"; reason: unknown };
+
+    const planResult: Settled<PlanOrderListResponse> = await this.client
+      .getPlanOrders(undefined, "1")
+      .then((v) => ({ status: "fulfilled" as const, value: v }))
+      .catch((e) => ({ status: "rejected" as const, reason: e }));
+
+    const stopResult: Settled<StopOrderListResponse> = await this.client
+      .getStopOrders(undefined, 0, 1)
+      .then((v) => ({ status: "fulfilled" as const, value: v }))
+      .catch((e) => ({ status: "rejected" as const, reason: e }));
+
+    const results = [planResult, stopResult] as const;
 
     const extracted = [
       results[0].status === "fulfilled" ? this.extractPlanOrders(results[0].value) : [],
@@ -632,17 +678,16 @@ export class PositionSummaryMonitor {
     ];
 
     // Log any failures at INFO level so operators can see them
+    const src = ["planorder", "stoporder"] as const;
     for (let i = 0; i < results.length; i++) {
       const r = results[i];
       if (r.status === "rejected") {
-        const src = i === 0 ? "planorder" : "stoporder";
         const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
-        this.logger.warn(`⚠️ Failed to fetch ${src} pending orders: ${msg}`);
+        this.logger.warn(`⚠️ Failed to fetch ${src[i]} pending orders: ${msg}`);
       }
     }
 
     if (this.logger.isDebugEnabled()) {
-      const src = ["planorder", "stoporder"];
       const status = results.map((r, i) => {
         if (r.status === "fulfilled") return `${src[i]}:ok(${extracted[i].length})`;
         const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);

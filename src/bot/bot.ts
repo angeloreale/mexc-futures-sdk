@@ -106,6 +106,7 @@ export class SignalBot {
       onAlert: (alert) => this.sendPositionAlert(alert),
       slTpRetentionDays: config.logRetentionDays,
       onSample: (positions) => this.pnlMonitor?.feedPositions(positions),
+      requestSpacingMs: config.orderRateIntervalMs,
     });
 
     // Initialize Telegram bot
