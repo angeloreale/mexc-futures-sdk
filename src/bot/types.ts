@@ -143,4 +143,10 @@ export interface BotConfig {
 
   /** Trailing window (hours) for PNL max/min stats in the summary (default 4). */
   summaryWindowHours: number;
+
+  /** Token-bucket burst capacity for MEXC API requests — max requests sent immediately before throttling (default 3). */
+  orderRateCapacity: number;
+
+  /** Milliseconds between API request refills — sustained rate ≈ 1000/orderRateIntervalMs req/s (default 200). */
+  orderRateIntervalMs: number;
 }
