@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { MexcFuturesSDK } from "../client";
 import { SubmitOrderRequest, SubmitOrderResponse, SubmitPlanOrderRequest } from "../types/orders";
+import { Position } from "../types/account";
 import { BotConfig, ResolvedTrade, TradeRecord } from "./types";
 import { Logger } from "../utils/logger";
 
@@ -74,6 +75,71 @@ export class TradeExecutor {
       return this.executeTrigger(trade);
     }
     return this.executeMarket(trade);
+  }
+
+  /**
+   * Close an open position immediately with a market order.
+   *
+   * @param symbol   MEXC contract symbol (e.g. "BTC_USDT")
+   * @param position The open-position record, providing holdVol and positionId
+   * @param currentPrice Current market price for the market close order
+   * @param positionType 1=long, 2=short
+   * @param openType 1=isolated, 2=cross
+   * @param leverage Leverage used (optional, MEXC may require for isolated)
+   */
+  async closePosition(
+    symbol: string,
+    position: Position,
+    currentPrice: number,
+    positionType: 1 | 2,
+    openType: 1 | 2,
+    leverage: number
+  ): Promise<{ success: boolean; orderId?: string; error?: string }> {
+    if (this.config.dryRun) {
+      this.logger.info(
+        `🧪 [DRY RUN] Would close ${symbol} (vol=${position.holdVol}, price=${currentPrice})`
+      );
+      return { success: true, orderId: "DRY_RUN" };
+    }
+
+    if (!this.config.tradingEnabled) {
+      return { success: false, error: "Trading disabled" };
+    }
+
+    // side 2 = close long, side 4 = close short
+    const side = positionType === 1 ? 2 : 4;
+
+    const params: SubmitOrderRequest = {
+      symbol,
+      price: currentPrice || 0,
+      vol: position.holdVol,
+      side,
+      type: 5, // market
+      openType,
+      leverage,
+      reduceOnly: true,
+      positionId: position.positionId,
+    };
+
+    try {
+      this.logger.info(
+        `🔚 Closing position: ${symbol} ${positionType === 1 ? "LONG" : "SHORT"} vol=${position.holdVol} side=${side}`
+      );
+      const response = await this.client.submitOrder(params);
+      if (response.success) {
+        const oid = String(response.data ?? "");
+        this.logger.info(`✅ Close order placed: ${oid} for ${symbol}`);
+        return { success: true, orderId: oid };
+      }
+      return {
+        success: false,
+        error: response.message || `Code ${response.code}`,
+      };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`❌ Close order failed for ${symbol}: ${msg}`);
+      return { success: false, error: msg };
+    }
   }
 
   /**

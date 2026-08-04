@@ -1,7 +1,9 @@
 import { MexcFuturesSDK } from "../client";
 import { Position } from "../types/account";
 import { Logger } from "../utils/logger";
+import { toFiniteNumber } from "../utils/numbers";
 import { AccountSnapshot } from "./pnlMonitor";
+import { SlTpStore, SlTpEntry } from "./slTpStore";
 
 /** A single unrealized-PNL sample for one position. */
 interface PnlSample {
@@ -39,6 +41,29 @@ export interface OpenPositionSummary {
   margin: number;
 }
 
+/**
+ * An alert fired while sampling when an open position has travelled more than
+ * halfway from its entry toward its stop-loss or take-profit level.
+ */
+export interface PositionAlert {
+  positionId: string;
+  symbol: string;
+  positionType: 1 | 2; // 1 = long, 2 = short
+  leverage: number;
+  /** Average open (entry) price */
+  entry: number;
+  /** Current price derived from unrealized PNL */
+  currentPrice: number;
+  /** Stop-loss price */
+  sl: number;
+  /** Take-profit price */
+  tp: number;
+  /** Which level the price is more than 50% of the way toward */
+  target: "SL" | "TP";
+  /** Fraction of the distance from entry toward the target already covered (0..1+) */
+  progress: number;
+}
+
 /** Full data payload produced on each summary emission. */
 export interface PositionSummary {
   /** Trailing window (hours) over which PNL max/min was tracked */
@@ -53,6 +78,8 @@ export interface PositionSummary {
 
 export type OnPositionSummary = (summary: PositionSummary) => void;
 
+export type OnPositionAlert = (alert: PositionAlert) => void;
+
 export interface PositionSummaryMonitorOptions {
   client: MexcFuturesSDK;
   logger: Logger;
@@ -65,6 +92,12 @@ export interface PositionSummaryMonitorOptions {
   intervalHours: number;
   /** Called each time a summary is ready to be sent */
   onSummary: OnPositionSummary;
+  /** SL/TP levels per symbol, populated on order execution, for >50%-of-way alerts. */
+  slTpStore: SlTpStore;
+  /** Called once per position per target when >50% of the way toward SL/TP. */
+  onAlert: OnPositionAlert;
+  /** Days after which stale SL/TP entries are pruned (default LOG_RETENTION_DAYS). */
+  slTpRetentionDays: number;
 }
 
 /**
@@ -85,10 +118,15 @@ export class PositionSummaryMonitor {
   private intervalMs: number;
   private sampleIntervalMs: number;
   private onSummary: OnPositionSummary;
+  private slTpStore: SlTpStore;
+  private slTpRetentionMs: number;
+  private onAlert: OnPositionAlert;
   private stats = new Map<string, PositionStats>();
   private sampleTimer: NodeJS.Timeout | null = null;
   private summaryTimer: NodeJS.Timeout | null = null;
   private sampling = false;
+  /** Tracks which positions already alerted per target, to avoid repeat alerts. */
+  private alerted = new Map<string, { sl: boolean; tp: boolean }>();
 
   constructor(opts: PositionSummaryMonitorOptions) {
     this.client = opts.client;
@@ -98,6 +136,9 @@ export class PositionSummaryMonitor {
     this.windowMs = Math.max(opts.windowHours, 1) * 3600 * 1000;
     this.intervalMs = Math.max(opts.intervalHours, 1) * 3600 * 1000;
     this.onSummary = opts.onSummary;
+    this.slTpStore = opts.slTpStore;
+    this.onAlert = opts.onAlert;
+    this.slTpRetentionMs = Math.max(opts.slTpRetentionDays, 1) * 86400_000;
   }
 
   /** Start sampling and schedule summary emissions. */
@@ -144,8 +185,8 @@ export class PositionSummaryMonitor {
       for (const p of active) {
         const id = String(p.positionId);
         seen.add(id);
-        const pnl = p.unRealizedPnl;
-        if (typeof pnl !== "number" || !Number.isFinite(pnl)) {
+        const pnl = toFiniteNumber(p.unRealizedPnl);
+        if (!Number.isFinite(pnl)) {
           // Some positions (e.g. airdrops) may omit unRealizedPnl — skip sampling.
           continue;
         }
@@ -183,6 +224,10 @@ export class PositionSummaryMonitor {
           this.stats.delete(id);
         }
       }
+
+      // Evaluate >50%-toward-SL/TP alerts for positions with known targets.
+      this.slTpStore.pruneStale(this.slTpRetentionMs);
+      this.checkAlerts(active);
     } catch (error) {
       this.logger.warn(
         "⚠️ Position summary sampling failed:",
@@ -209,10 +254,7 @@ export class PositionSummaryMonitor {
         const st = this.stats.get(id);
         // Prefer the freshest value from this fetch for "current"; the tracked
         // samples (rolling window) provide the max/min PNL reached.
-        const freshPnl =
-          typeof p.unRealizedPnl === "number" && Number.isFinite(p.unRealizedPnl)
-            ? p.unRealizedPnl
-            : NaN;
+        const freshPnl = toFiniteNumber(p.unRealizedPnl);
         let currentPnl = freshPnl;
         let maxPnl = freshPnl;
         let minPnl = freshPnl;
@@ -250,8 +292,8 @@ export class PositionSummaryMonitor {
         const asset = await this.client.getAccountAsset(this.baseCurrency);
         const inner: any = asset.data ?? asset;
         account = {
-          availableBalance: inner.availableBalance ?? NaN,
-          equity: inner.equity ?? NaN,
+          availableBalance: toFiniteNumber(inner.availableBalance),
+          equity: toFiniteNumber(inner.equity),
           currency: this.baseCurrency,
         };
       } catch (error) {
@@ -284,6 +326,133 @@ export class PositionSummaryMonitor {
         error instanceof Error ? error.message : error
       );
     }
+  }
+
+  // ── Alert helpers ─────────────────────────────────────────────────
+
+  /**
+   * For each open position with a known SL/TP entry, evaluate whether the
+   * price has moved more than 50% of the way toward the stop-loss or
+   * take-profit level. Fires at most once per target per position lifetime.
+   */
+  private checkAlerts(active: Position[]): void {
+    const seen = new Set<string>();
+    for (const p of active) {
+      const id = String(p.positionId);
+      seen.add(id);
+      const entry = this.slTpStore.get(p.symbol);
+      if (!entry || entry.positionType !== p.positionType) continue;
+
+      const alert = this.evaluateAlert(p, entry);
+      if (!alert) continue;
+
+      const key = alert.target.toLowerCase() as "sl" | "tp";
+      const flags = this.alerted.get(id);
+      if (flags && flags[key]) continue; // already alerted for this target
+
+      this.alerted.set(id, {
+        sl: flags?.sl || key === "sl",
+        tp: flags?.tp || key === "tp",
+      });
+      this.logger.info(
+        `🚨 ${alert.target} alert: ${p.symbol} ${Math.round(alert.progress * 100)}% of the way`
+      );
+      this.onAlert(alert);
+    }
+    // Drop alert flags for positions that are no longer open.
+    for (const id of Array.from(this.alerted.keys())) {
+      if (!seen.has(id)) this.alerted.delete(id);
+    }
+  }
+
+  /**
+   * Evaluate whether an open position is >50% of the way from entry toward
+   * its SL or TP. Returns an alert payload, or null if neither threshold is
+   * crossed.
+   */
+  private evaluateAlert(
+    p: Position,
+    entry: SlTpEntry
+  ): PositionAlert | null {
+    const avgEntry = p.openAvgPrice;
+    const current = this.deriveCurrentPrice(p);
+    if (
+      !Number.isFinite(avgEntry) ||
+      avgEntry <= 0 ||
+      !Number.isFinite(current) ||
+      current <= 0
+    )
+      return null;
+
+    const isLong = p.positionType === 1;
+    const { sl, tp } = entry;
+    let target: "SL" | "TP" | null = null;
+    let progress = 0;
+
+    // Priority: SL first (more critical), then TP.
+    if (isLong) {
+      if (Number.isFinite(sl) && sl > 0 && sl < avgEntry) {
+        const p = (avgEntry - current) / (avgEntry - sl);
+        if (p > 0.5) {
+          target = "SL";
+          progress = p;
+        }
+      }
+      if (!target && Number.isFinite(tp) && tp > 0 && tp > avgEntry) {
+        const p = (current - avgEntry) / (tp - avgEntry);
+        if (p > 0.5) {
+          target = "TP";
+          progress = p;
+        }
+      }
+    } else {
+      if (Number.isFinite(sl) && sl > 0 && sl > avgEntry) {
+        const p = (current - avgEntry) / (sl - avgEntry);
+        if (p > 0.5) {
+          target = "SL";
+          progress = p;
+        }
+      }
+      if (!target && Number.isFinite(tp) && tp > 0 && tp < avgEntry) {
+        const p = (avgEntry - current) / (avgEntry - tp);
+        if (p > 0.5) {
+          target = "TP";
+          progress = p;
+        }
+      }
+    }
+
+    if (!target) return null;
+
+    return {
+      positionId: String(p.positionId),
+      symbol: p.symbol,
+      positionType: p.positionType,
+      leverage: p.leverage,
+      entry: avgEntry,
+      currentPrice: current,
+      sl,
+      tp,
+      target,
+      progress: Math.min(progress, 9.99), // cap to avoid absurd values on extreme moves
+    };
+  }
+
+  /**
+   * Derive approximate current market price from unrealized PNL and the
+   * position's remaining volume + average entry. Avoids an extra ticker API
+   * call per position per poll.
+   *
+   *   LONG:  currentPrice = openAvgPrice + unRealizedPnl / holdVol
+   *   SHORT: currentPrice = openAvgPrice - unRealizedPnl / holdVol
+   */
+  private deriveCurrentPrice(p: Position): number {
+    const pnl = toFiniteNumber(p.unRealizedPnl);
+    const vol = p.holdVol;
+    if (!Number.isFinite(pnl) || !vol || vol <= 0) return NaN;
+    return p.positionType === 1
+      ? p.openAvgPrice + pnl / vol
+      : p.openAvgPrice - pnl / vol;
   }
 
 }

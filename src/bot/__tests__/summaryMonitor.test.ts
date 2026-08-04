@@ -1,6 +1,11 @@
-import { PositionSummaryMonitor, PositionSummary } from "../summaryMonitor";
+import {
+  PositionSummaryMonitor,
+  PositionSummary,
+  PositionAlert,
+} from "../summaryMonitor";
 import { Logger } from "../../utils/logger";
 import { Position } from "../../types/account";
+import { SlTpStore } from "../slTpStore";
 
 const logger = new Logger({ level: "SILENT" });
 
@@ -30,12 +35,36 @@ function makePosition(overrides?: Partial<Position>): Position {
   };
 }
 
+function makeMonitor(
+  client: any,
+  store: SlTpStore,
+  onSummary: jest.Mock,
+  onAlert: jest.Mock
+) {
+  return new PositionSummaryMonitor({
+    client,
+    logger,
+    baseCurrency: "USDT",
+    sampleIntervalSeconds: 30,
+    windowHours: 4,
+    intervalHours: 8,
+    onSummary,
+    slTpStore: store,
+    onAlert,
+    slTpRetentionDays: 90,
+  });
+}
+
 describe("PositionSummaryMonitor", () => {
   let client: any;
   let onSummary: jest.Mock;
+  let onAlert: jest.Mock;
+  let store: SlTpStore;
 
   beforeEach(() => {
     onSummary = jest.fn();
+    onAlert = jest.fn();
+    store = new SlTpStore();
     client = {
       getOpenPositions: jest.fn(),
       getAccountAsset: jest.fn(),
@@ -47,21 +76,13 @@ describe("PositionSummaryMonitor", () => {
       .mockResolvedValueOnce({ data: [makePosition({ unRealizedPnl: 10 })] })
       .mockResolvedValueOnce({ data: [makePosition({ unRealizedPnl: 25 })] })
       .mockResolvedValueOnce({ data: [makePosition({ unRealizedPnl: 5 })] })
-      .mockResolvedValueOnce({ data: [makePosition({ unRealizedPnl: 12 })] }); // emitSummary fetch
+      .mockResolvedValueOnce({ data: [makePosition({ unRealizedPnl: 12 })] });
 
     client.getAccountAsset.mockResolvedValue({
       data: { availableBalance: 1000, equity: 5000 },
     });
 
-    const monitor = new PositionSummaryMonitor({
-      client,
-      logger,
-      baseCurrency: "USDT",
-      sampleIntervalSeconds: 30,
-      windowHours: 4,
-      intervalHours: 8,
-      onSummary,
-    });
+    const monitor = makeMonitor(client, store, onSummary, onAlert);
 
     await monitor.sample(); // pnl 10
     await monitor.sample(); // pnl 25
@@ -83,14 +104,175 @@ describe("PositionSummaryMonitor", () => {
     expect(pos.minPnl).toBe(5); // lowest sampled in window
   });
 
-  it("includes the account snapshot in the summary", async () => {
+  it("coerces string-valued unRealizedPnl into numbers for min/max tracking", async () => {
     client.getOpenPositions
-      .mockResolvedValueOnce({ data: [makePosition({ unRealizedPnl: 3 })] })
-      .mockResolvedValue({ data: [makePosition({ unRealizedPnl: 3 })] });
+      .mockResolvedValueOnce({ data: [makePosition({ unRealizedPnl: "10" as any })] })
+      .mockResolvedValueOnce({ data: [makePosition({ unRealizedPnl: "20" as any })] })
+      .mockResolvedValueOnce({ data: [makePosition({ unRealizedPnl: "15" as any })] });
 
     client.getAccountAsset.mockResolvedValue({
-      data: { availableBalance: 1234.56, equity: 5678.9 },
+      data: { availableBalance: "1234.56", equity: 5000 },
     });
+
+    const monitor = makeMonitor(client, store, onSummary, onAlert);
+    await monitor.sample();
+    await monitor.sample();
+    await monitor.emitSummary();
+
+    const summary: PositionSummary = onSummary.mock.calls[0][0];
+    expect(summary.openPositions[0].currentPnl).toBe(15);
+    expect(summary.openPositions[0].maxPnl).toBe(20);
+    expect(summary.openPositions[0].minPnl).toBe(10);
+  });
+
+  it("coerces string-valued availableBalance into a number", async () => {
+    client.getOpenPositions.mockResolvedValue({ data: [makePosition({ unRealizedPnl: 1 })] });
+    client.getAccountAsset.mockResolvedValue({
+      data: { availableBalance: "1234.56", equity: 5000 },
+    });
+
+    const monitor = makeMonitor(client, store, onSummary, onAlert);
+    await monitor.sample();
+    await monitor.emitSummary();
+
+    expect(onSummary.mock.calls[0][0].account.availableBalance).toBe(1234.56);
+  });
+
+  // ── Alert tests ─────────────────────────────────────────────────────
+
+  it("fires SL alert when LONG position is >50% toward SL", async () => {
+    // Entry 100, holdVol 10, currentPrice = 87 → PNL = (87-100)*10 = -130
+    // SL = 80, dist entry→SL = 20, progress = (100-87)/20 = 0.65
+    store.set("BTC_USDT", { sl: 80, tp: 130, positionType: 1, setAt: Date.now() });
+
+    client.getOpenPositions.mockResolvedValue({
+      data: [makePosition({ positionId: 1, openAvgPrice: 100, holdVol: 10, unRealizedPnl: -130, positionType: 1 })],
+    });
+
+    const monitor = makeMonitor(client, store, onSummary, onAlert);
+    await monitor.sample();
+
+    expect(onAlert).toHaveBeenCalledTimes(1);
+    const a: PositionAlert = onAlert.mock.calls[0][0];
+    expect(a.target).toBe("SL");
+    expect(a.symbol).toBe("BTC_USDT");
+    expect(a.progress).toBeCloseTo(0.65, 2);
+  });
+
+  it("fires TP alert when LONG position is >50% toward TP", async () => {
+    // Entry 100, holdVol 10, currentPrice = 116 → PNL = 160
+    // TP = 120, dist = 20, progress = 16/20 = 0.8
+    store.set("BTC_USDT", { sl: 80, tp: 120, positionType: 1, setAt: Date.now() });
+
+    client.getOpenPositions.mockResolvedValue({
+      data: [makePosition({ positionId: 1, openAvgPrice: 100, holdVol: 10, unRealizedPnl: 160, positionType: 1 })],
+    });
+
+    const monitor = makeMonitor(client, store, onSummary, onAlert);
+    await monitor.sample();
+
+    expect(onAlert).toHaveBeenCalledTimes(1);
+    const a: PositionAlert = onAlert.mock.calls[0][0];
+    expect(a.target).toBe("TP");
+    expect(a.progress).toBeCloseTo(0.8, 2);
+  });
+
+  it("does not fire alert when under 50% threshold", async () => {
+    store.set("BTC_USDT", { sl: 80, tp: 120, positionType: 1, setAt: Date.now() });
+
+    // Price at 109 → PNL = 90, progress to TP = 9/20 = 0.45 (<0.5), progress to SL negative
+    client.getOpenPositions.mockResolvedValue({
+      data: [makePosition({ positionId: 1, openAvgPrice: 100, holdVol: 10, unRealizedPnl: 90, positionType: 1 })],
+    });
+
+    const monitor = makeMonitor(client, store, onSummary, onAlert);
+    await monitor.sample();
+
+    expect(onAlert).not.toHaveBeenCalled();
+  });
+
+  it("fires alert only once per target (dedup)", async () => {
+    store.set("BTC_USDT", { sl: 80, tp: 130, positionType: 1, setAt: Date.now() });
+
+    client.getOpenPositions.mockResolvedValue({
+      data: [makePosition({ positionId: 1, openAvgPrice: 100, holdVol: 10, unRealizedPnl: -130, positionType: 1 })],
+    });
+
+    const monitor = makeMonitor(client, store, onSummary, onAlert);
+    await monitor.sample();
+    expect(onAlert).toHaveBeenCalledTimes(1);
+
+    await monitor.sample();
+    // Still only 1 call — dedup prevented a second alert.
+    expect(onAlert).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears alert flags when position closes, allowing re-alert on new position", async () => {
+    store.set("BTC_USDT", { sl: 80, tp: 130, positionType: 1, setAt: Date.now() });
+
+    // First: position 1 alerts.
+    client.getOpenPositions.mockResolvedValueOnce({
+      data: [makePosition({ positionId: 1, openAvgPrice: 100, holdVol: 10, unRealizedPnl: -130, positionType: 1 })],
+    });
+    const monitor = makeMonitor(client, store, onSummary, onAlert);
+    await monitor.sample();
+    expect(onAlert).toHaveBeenCalledTimes(1);
+
+    // Position 1 closes, position 2 opens.
+    client.getOpenPositions.mockResolvedValueOnce({
+      data: [makePosition({ positionId: 2, openAvgPrice: 100, holdVol: 10, unRealizedPnl: -130, positionType: 1 })],
+    });
+    store.set("BTC_USDT", { sl: 80, tp: 130, positionType: 1, setAt: Date.now() });
+    await monitor.sample();
+    expect(onAlert).toHaveBeenCalledTimes(2);
+  });
+
+  it("fires TP alert for SHORT position >50% toward TP", async () => {
+    // Entry 100, holdVol 10, currentPrice = 88 → PNL = (100-88)*10 = 120
+    // TP = 80, dist = 20, progress = (100-88)/20 = 0.6
+    store.set("ETH_USDT", { sl: 115, tp: 80, positionType: 2, setAt: Date.now() });
+
+    client.getOpenPositions.mockResolvedValue({
+      data: [makePosition({ symbol: "ETH_USDT", positionId: 1, openAvgPrice: 100, holdVol: 10, unRealizedPnl: 120, positionType: 2 })],
+    });
+
+    const monitor = makeMonitor(client, store, onSummary, onAlert);
+    await monitor.sample();
+
+    expect(onAlert).toHaveBeenCalledTimes(1);
+    const a: PositionAlert = onAlert.mock.calls[0][0];
+    expect(a.target).toBe("TP");
+    expect(a.symbol).toBe("ETH_USDT");
+    expect(a.progress).toBeCloseTo(0.6, 2);
+  });
+
+  it("fires SL alert for SHORT position >50% toward SL", async () => {
+    // Entry 100, holdVol 10, currentPrice = 109 → PNL = -(109-100)*10 = -90
+    // Hmm wait, for short: unRealizedPnl = (entry - currentPrice)*holdVol = (100-109)*10 = -90
+    // SL = 115, dist = 15, progress = (109-100)/15 = 0.6
+    store.set("ETH_USDT", { sl: 115, tp: 80, positionType: 2, setAt: Date.now() });
+
+    client.getOpenPositions.mockResolvedValue({
+      data: [makePosition({ symbol: "ETH_USDT", positionId: 1, openAvgPrice: 100, holdVol: 10, unRealizedPnl: -90, positionType: 2 })],
+    });
+
+    const monitor = makeMonitor(client, store, onSummary, onAlert);
+    await monitor.sample();
+
+    expect(onAlert).toHaveBeenCalledTimes(1);
+    const a: PositionAlert = onAlert.mock.calls[0][0];
+    expect(a.target).toBe("SL");
+    expect(a.symbol).toBe("ETH_USDT");
+    expect(a.progress).toBeCloseTo(0.6, 2);
+  });
+
+  // ── SlTpStore prune test ────────────────────────────────────────────
+
+  it("prunes stale SlTpStore entries on sample", async () => {
+    // Set a stale entry (2 days old) and keep retention at 1 day (86400000 ms)
+    store.set("OLD_BTC", { sl: 80, tp: 130, positionType: 1, setAt: Date.now() - 2 * 86400000 });
+
+    client.getOpenPositions.mockResolvedValue({ data: [] });
 
     const monitor = new PositionSummaryMonitor({
       client,
@@ -100,8 +282,26 @@ describe("PositionSummaryMonitor", () => {
       windowHours: 4,
       intervalHours: 8,
       onSummary,
+      slTpStore: store,
+      onAlert,
+      slTpRetentionDays: 1,
     });
 
+    expect(store.get("OLD_BTC")).toBeDefined();
+    await monitor.sample();
+    expect(store.get("OLD_BTC")).toBeUndefined(); // pruned
+  });
+
+  it("includes the account snapshot in the summary", async () => {
+    client.getOpenPositions
+      .mockResolvedValueOnce({ data: [makePosition({ unRealizedPnl: 3 })] })
+      .mockResolvedValue({ data: [makePosition({ unRealizedPnl: 3 })] });
+
+    client.getAccountAsset.mockResolvedValue({
+      data: { availableBalance: 1234.56, equity: 5678.9 },
+    });
+
+    const monitor = makeMonitor(client, store, onSummary, onAlert);
     await monitor.sample();
     await monitor.emitSummary();
 
@@ -122,15 +322,7 @@ describe("PositionSummaryMonitor", () => {
       data: { availableBalance: 1, equity: 2 },
     });
 
-    const monitor = new PositionSummaryMonitor({
-      client,
-      logger,
-      baseCurrency: "USDT",
-      sampleIntervalSeconds: 30,
-      windowHours: 4,
-      intervalHours: 8,
-      onSummary,
-    });
+    const monitor = makeMonitor(client, store, onSummary, onAlert);
 
     await monitor.sample(); // track position 1
     await monitor.sample(); // position 1 gone → should be dropped

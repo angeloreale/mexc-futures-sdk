@@ -275,6 +275,30 @@ CHECK POSITIONS
 
 > 💡 The on-demand summary reflects the same data as the periodic one, including the current / max / min PNL tracked over the trailing window. If the summary feature is disabled (no `SUMMARY_NOTIFICATION_CHANNEL`), the command is ignored.
 
+**50%-of-way alerts:**
+
+While the summary monitor polls open positions, it also checks whether the current price has travelled more than halfway from entry toward the stop-loss or the take-profit. When the >50% threshold is crossed, an alert is sent to the summary channel — once per position per target. Example:
+
+```
+🚨 POSITION ALERT — 65% toward SL
+
+🪙 BTC_USDT · LONG · 10x
+Entry: 67,000.00 → Now: 66,350.00
+🎯 Stop-loss @ 66,000.00 — 65% of the way
+```
+
+The SL/TP levels come from the bot's own order execution; manually placed positions won't trigger alerts. Alert flags are reset when the position closes, so a new position on the same symbol can alert again. Stale entries older than `LOG_RETENTION_DAYS` are pruned automatically.
+
+**Closing a position manually:**
+
+Send `Close {orderId}` to an allowed channel and the bot will resolve the MEXC official order ID via the API, find the matching open position, and close it immediately with a market order. A confirmation is sent to the summary channel.
+
+```
+Close 1234567890
+```
+
+The order ID must be a MEXC official order ID (the one shown in the order-placed alert). The command is idempotent and requires the channel to be in `ALLOWED_CHANNELS`.
+
 ### 🚀 Order Placement Alerts
 
 The bot also sends a short alert to the **same summary channel** whenever an order is successfully placed/executed (market fills immediately, trigger entries are placed as pending). It shows the symbol, direction, leverage, entry, SL/TP, volume, notional, risk and the order ID:
