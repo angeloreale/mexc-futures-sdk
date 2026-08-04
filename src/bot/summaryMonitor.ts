@@ -184,6 +184,8 @@ export class PositionSummaryMonitor {
         `(window ${this.windowMs / 3600000}h, emit every ${this.intervalMs / 3600000}h)`
     );
     void this.sample();
+    // Emit an initial summary snapshot so CHECK POSITIONS / startup is observable.
+    void this.emitSummary();
     this.sampleTimer = setInterval(() => void this.sample(), this.sampleIntervalMs);
     if (this.sampleTimer.unref) this.sampleTimer.unref();
 
@@ -249,6 +251,19 @@ export class PositionSummaryMonitor {
           st.margin = p.oim || p.im || 0;
         }
         st.samples.push({ ts: now, pnl });
+
+        // Log per-position ticker delta at INFO so every poll is observable.
+        const prevPnl = st.samples.length >= 2 ? st.samples[st.samples.length - 2].pnl : NaN;
+        if (Number.isFinite(prevPnl)) {
+          const delta = pnl - prevPnl;
+          const arrow = delta >= 0 ? "📈" : "📉";
+          const sign = delta >= 0 ? "+" : "";
+          this.logger.info(
+            `${arrow} ${p.symbol} Δ${sign}${delta.toFixed(2)} PNL=${pnl.toFixed(2)} (${st.samples.length} samples)`
+          );
+        } else {
+          this.logger.info(`📍 ${p.symbol} first sample PNL=${pnl.toFixed(2)}`);
+        }
       }
 
       // Prune samples older than the window and drop positions no longer open.
@@ -491,7 +506,10 @@ export class PositionSummaryMonitor {
 
   private dateStr(ms?: number): string {
     const d = ms ? new Date(ms) : new Date();
-    return d.toISOString().slice(0, 10);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
   }
 
   // ── Alert helpers ─────────────────────────────────────────────────
