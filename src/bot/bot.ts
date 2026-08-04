@@ -2,7 +2,7 @@ import { Telegraf, Context } from "telegraf";
 import { message, channelPost } from "telegraf/filters";
 import { MexcFuturesSDK } from "../client";
 import { Logger } from "../utils/logger";
-import { BotConfig, TradeSignal } from "./types";
+import { BotConfig, TradeSignal, TradeRecord } from "./types";
 import { parseSignals, normalizeSymbol } from "./parser";
 import { ContractResolver } from "./resolver";
 import { calculatePositionSize } from "./sizer";
@@ -19,6 +19,7 @@ import {
   PositionSummary,
 } from "./summaryMonitor";
 import { formatPositionSummaryMessage } from "./summaryMessage";
+import { formatOrderPlacedMessage } from "./orderMessage";
 
 /**
  * Main Telegram Signal Bot.
@@ -209,6 +210,29 @@ export class SignalBot {
     } catch (error) {
       this.logger.error(
         "❌ Failed to send position summary:",
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+
+  /**
+   * Send an order-placed notification to the summary channel.
+   */
+  private async sendOrderPlacedNotification(record: TradeRecord): Promise<void> {
+    if (!this.config.summaryNotificationChannel) return;
+    const text = formatOrderPlacedMessage(record, this.config.baseCurrency);
+    try {
+      await this.telegram.telegram.sendMessage(
+        this.config.summaryNotificationChannel,
+        text,
+        { parse_mode: "HTML" }
+      );
+      this.logger.info(
+        `🚀 Order-placed notification sent to ${this.config.summaryNotificationChannel}`
+      );
+    } catch (error) {
+      this.logger.error(
+        "❌ Failed to send order-placed notification:",
         error instanceof Error ? error.message : error
       );
     }
@@ -464,6 +488,11 @@ export class SignalBot {
         this.logger.info(
           `✅ Trade executed: ${record.orderId} for ${resolvedTrade.mexcSymbol}`
         );
+        // Notify the summary channel that an order was placed/executed
+        // (skip in dry-run — no real order was submitted).
+        if (!this.config.dryRun) {
+          await this.sendOrderPlacedNotification(record);
+        }
       } else {
         this.logger.error(
           `❌ Trade failed: ${record.error} for ${resolvedTrade.mexcSymbol}`

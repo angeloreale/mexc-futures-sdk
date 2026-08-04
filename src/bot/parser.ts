@@ -7,7 +7,7 @@ import { TradeSignal } from "./types";
  *   SELL BTCUSDT@65000 SL 66000 TP1 64000 TP2 63000 TP3 62000
  *   BUY ETHUSDT@3500 SL 3400
  *   BUY ZECUSDT SL 459.41 TP1 467.72 TP2 468.80 TP3 471.42  (market — no @/EP)
- *   BUY BNBUSDT@571.22 SL 569.68 TP1 571.49 TP2 572.21 R2  (with risk override)
+ *   BUY BNBUSDT@571.22 SL 569.68 TP1 571.49 TP2 572.21 R2 L50  (risk + leverage override)
  *
  * SIGNAL_REGEX captures (with @price or EP price):
  *   1: action (BUY|SELL)
@@ -47,6 +47,12 @@ const RISK_REGEX = /\bR(\d+(?:\.\d+)?)\b/i;
  *   V7        → executeCycle 2 (7 days)
  */
 const VALIDITY_REGEX = /\bV(\d+)\b/i;
+
+/**
+ * Extract an optional custom-leverage marker: L<number> (e.g. L200 = 200x).
+ * Must appear as a standalone token (word boundary). Valid range 1–200.
+ */
+const LEVERAGE_REGEX = /\bL(\d+)\b/i;
 
 /**
  * Try to parse a trade signal from a single line of text.
@@ -115,6 +121,9 @@ export function parseSignal(
   // Parse optional validity marker (V7 = 7 days, V1 or absent = 24h)
   const executeCycle = parseValidity(tpSection);
 
+  // Parse optional custom-leverage marker (L200 = 200x)
+  const leverageOverride = parseLeverage(tpSection);
+
   // Extract TP values
   const tpValues: number[] = [];
   let tpMatch;
@@ -154,6 +163,7 @@ export function parseSignal(
     orderType: isMarketEntry ? "market" : "trigger",
     riskPercentOverride,
     executeCycle,
+    leverageOverride,
     messageId,
     chatId,
     timestamp,
@@ -187,6 +197,22 @@ function parseValidity(tail: string): 1 | 2 | undefined {
     const days = parseInt(m[1], 10);
     if (days >= 7) return 2; // 7+ days → executeCycle 2
     return 1; // default 24h
+  }
+  return undefined;
+}
+
+/**
+ * Parse an optional custom-leverage marker from the tail of a signal line.
+ * E.g. L200 → 200 (200x), L5 → 5x. Valid range 1–200.
+ * Returns the leverage multiplier, or undefined if absent/out of range.
+ */
+function parseLeverage(tail: string): number | undefined {
+  const m = tail.match(LEVERAGE_REGEX);
+  if (m) {
+    const lev = parseInt(m[1], 10);
+    if (isFinite(lev) && lev >= 1 && lev <= 200) {
+      return lev;
+    }
   }
   return undefined;
 }

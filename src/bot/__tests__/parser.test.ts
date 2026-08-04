@@ -376,3 +376,56 @@ describe("parseSignal risk override", () => {
     expect(result!.tp).toEqual([467.72, 468.80, 471.42]);
   });
 });
+
+// ── Leverage override ─────────────────────────────────────────────────────
+
+describe("parseSignal leverage override", () => {
+  it("parses L200 as 200x leverage", () => {
+    const result = parseSignal("BUY TAOUSDT@123 SL 122 TP1 124 TP2 125 L200");
+    expect(result).not.toBeNull();
+    expect(result!.leverageOverride).toBe(200);
+    expect(result!.tp).toEqual([124, 125]);
+  });
+
+  it("parses L5 as 5x leverage", () => {
+    const result = parseSignal("BUY BTCUSDT@65000 SL 64000 TP 66000 L5");
+    expect(result).not.toBeNull();
+    expect(result!.leverageOverride).toBe(5);
+  });
+
+  it("parses L combined with R and V markers", () => {
+    const result = parseSignal(
+      "BUY TAOUSDT@123 SL 122 TP1 124 TP2 125 V7 R3 L50"
+    );
+    expect(result).not.toBeNull();
+    expect(result!.leverageOverride).toBe(50);
+    expect(result!.riskPercentOverride).toBe(3);
+    expect(result!.executeCycle).toBe(2); // V7 → 7 days
+  });
+
+  it("parses L on a market entry signal", () => {
+    const result = parseSignal("BUY BTCUSDT SL 50000 TP 52000 L20");
+    expect(result).not.toBeNull();
+    expect(result!.leverageOverride).toBe(20);
+    expect(result!.entry).toBe(0); // market entry
+  });
+
+  it("ignores L values out of range (>200)", () => {
+    const result = parseSignal("BUY BTCUSDT@65000 SL 64000 TP 66000 L250");
+    expect(result).not.toBeNull();
+    expect(result!.leverageOverride).toBeUndefined();
+  });
+
+  it("ignores L0 (leverage must be >= 1)", () => {
+    const result = parseSignal("BUY BTCUSDT@65000 SL 64000 TP 66000 L0");
+    expect(result).not.toBeNull();
+    expect(result!.leverageOverride).toBeUndefined();
+  });
+
+  it("does not mistake SL for a leverage marker", () => {
+    const result = parseSignal("BUY BTCUSDT@65000 SL 64000 TP 66000");
+    expect(result).not.toBeNull();
+    expect(result!.leverageOverride).toBeUndefined();
+    expect(result!.sl).toBe(64000);
+  });
+});
