@@ -62,7 +62,7 @@ describe("formatPositionSummaryMessage", () => {
     expect(text).toContain("Equity: 5,678.90 USDT");
   });
 
-  it("renders pending STOP orders as single lines with shortened order ids", () => {
+  it("renders pending plan orders as single lines with shortened order ids", () => {
     const text = formatPositionSummaryMessage(
       makeSummary({
         pendingOrders: [
@@ -70,27 +70,40 @@ describe("formatPositionSummaryMessage", () => {
             orderId: "817027833053397504",
             symbol: "TAO_USDT",
             side: 1,
+            triggerType: 1,
             triggerPrice: 187.54,
             vol: 0.5,
             leverage: 10,
             openType: 1,
           },
           {
-            orderId: "12",
+            orderId: "88",
+            symbol: "XLM_USDT",
+            side: 4, // TP on a long: fires when price >= 0.1788
+            triggerType: 1,
+            triggerPrice: 0.1788,
+            vol: 110,
+            leverage: 10,
+            openType: 1,
+          },
+          {
+            orderId: "99",
             symbol: "ETH_USDT",
-            side: 3,
-            triggerPrice: 3400,
-            vol: 2,
-            leverage: 5,
+            side: 2, // TP on a short: fires when price <= 1856
+            triggerType: 2,
+            triggerPrice: 1856,
+            vol: 0.17,
+            leverage: 30,
             openType: 1,
           },
         ],
       })
     );
 
-    expect(text).toContain("Pending Orders (2)");
-    expect(text).toContain("🟡 TAO_USDT LONG · STOP @ 187.54 · 0.50 · <code>…397504</code>");
-    expect(text).toContain("🟡 ETH_USDT SHORT · STOP @ 3,400.00 · 2.00 · <code>12</code>");
+    expect(text).toContain("Pending Orders (3)");
+    expect(text).toContain("🟡 TAO_USDT LONG · STOP ≥187.54 · 0.50 · <code>…397504</code>");
+    expect(text).toContain("🟡 XLM_USDT LONG · TP ≥0.18 · 110.00 · <code>88</code>");
+    expect(text).toContain("🟡 ETH_USDT SHORT · TP ≤1,856.00 · 0.17 · <code>99</code>");
   });
 
   it("handles an empty account gracefully", () => {

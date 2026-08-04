@@ -1,3 +1,5 @@
+import * as fs from "fs";
+import * as path from "path";
 import { MexcFuturesSDK } from "../client";
 import { Position } from "../types/account";
 import { Logger } from "../utils/logger";
@@ -41,13 +43,15 @@ export interface OpenPositionSummary {
   margin: number;
 }
 
-/** A pending STOP (entry) order, shown in the summary as a single line. */
+/** A pending plan order (TP/SL or stop/trigger entry), one line in the summary. */
 export interface PendingOrderSummary {
-  /** MEXC order ID */
+  /** MEXC plan order ID */
   orderId: string;
   symbol: string;
-  /** 1 = open long, 3 = open short */
-  side: 1 | 3;
+  /** 1=open long, 2=close short (TP/SL), 3=open short, 4=close long (TP/SL) */
+  side: 1 | 2 | 3 | 4;
+  /** 1 = fires when price >= triggerPrice, 2 = fires when price <= triggerPrice */
+  triggerType: 1 | 2;
   /** Trigger price */
   triggerPrice: number;
   /** Volume (contracts) */
@@ -117,6 +121,10 @@ export interface PositionSummaryMonitorOptions {
   onAlert: OnPositionAlert;
   /** Days after which stale SL/TP entries are pruned (default LOG_RETENTION_DAYS). */
   slTpRetentionDays: number;
+  /** JSON file where per-position min/max PNL stats are persisted across restarts. */
+  statsFilePath: string;
+  /** Days to retain persisted stats (default LOG_RETENTION_DAYS). */
+  statsRetentionDays: number;
 }
 
 /**
@@ -146,6 +154,11 @@ export class PositionSummaryMonitor {
   private sampling = false;
   /** Tracks which positions already alerted per target, to avoid repeat alerts. */
   private alerted = new Map<string, { sl: boolean; tp: boolean }>();
+  private statsFilePath: string;
+  private statsRetentionMs: number;
+  private lastStatsSave = 0;
+  private savingStats = false;
+  private readonly STATS_SAVE_THROTTLE_MS = 5000;
 
   constructor(opts: PositionSummaryMonitorOptions) {
     this.client = opts.client;
@@ -158,6 +171,9 @@ export class PositionSummaryMonitor {
     this.slTpStore = opts.slTpStore;
     this.onAlert = opts.onAlert;
     this.slTpRetentionMs = Math.max(opts.slTpRetentionDays, 1) * 86400_000;
+    this.statsFilePath = opts.statsFilePath;
+    this.statsRetentionMs = Math.max(opts.statsRetentionDays, 1) * 86400_000;
+    this.loadStats();
   }
 
   /** Start sampling and schedule summary emissions. */
@@ -175,7 +191,7 @@ export class PositionSummaryMonitor {
     if (this.summaryTimer.unref) this.summaryTimer.unref();
   }
 
-  /** Stop both timers. */
+  /** Stop both timers and flush persisted stats. */
   stop(): void {
     if (this.sampleTimer) {
       clearInterval(this.sampleTimer);
@@ -185,6 +201,7 @@ export class PositionSummaryMonitor {
       clearInterval(this.summaryTimer);
       this.summaryTimer = null;
     }
+    this.persistStats(true);
   }
 
   /**
@@ -243,6 +260,9 @@ export class PositionSummaryMonitor {
           this.stats.delete(id);
         }
       }
+
+      // Persist the tracked stats (throttled) so a restart doesn't lose them.
+      this.persistStats();
 
       // Evaluate >50%-toward-SL/TP alerts for positions with known targets.
       this.slTpStore.pruneStale(this.slTpRetentionMs);
@@ -306,15 +326,15 @@ export class PositionSummaryMonitor {
         };
       });
 
-      // Pending open (STOP) orders — fetched from the futures API, filtered to
-      // entry-side orders. Failure to fetch degrades gracefully (empty list).
+      // Pending plan orders — attached TP/SL orders and stop/trigger entries.
+      // Fetched from the futures API; failure degrades gracefully (empty list).
       let pendingOrders: PendingOrderSummary[] = [];
       try {
-        const ores = await this.client.getOpenOrders();
+        const ores = await this.client.getPendingPlanOrders();
         pendingOrders = this.extractPendingOrders(ores);
       } catch (error) {
         this.logger.debug(
-          "⚠️ Could not fetch open orders for summary:",
+          "⚠️ Could not fetch pending plan orders for summary:",
           error instanceof Error ? error.message : error
         );
       }
@@ -362,19 +382,114 @@ export class PositionSummaryMonitor {
     }
   }
 
+  // ── Persistence helpers ───────────────────────────────────────────
+
+  /**
+   * Load persisted per-position PNL stats from disk so min/max tracking
+   * survives a restart. Entries with no activity within the retention window
+   * are dropped, and samples outside the trailing max/min window are pruned
+   * (same semantics as live sampling).
+   */
+  private loadStats(): void {
+    try {
+      if (!fs.existsSync(this.statsFilePath)) return;
+      const raw = fs.readFileSync(this.statsFilePath, "utf-8");
+      const data = JSON.parse(raw);
+      const list: any[] = Array.isArray(data?.stats) ? data.stats : [];
+      const now = Date.now();
+
+      for (const s of list) {
+        if (!s || typeof s.positionId !== "string") continue;
+        const samples: PnlSample[] = Array.isArray(s.samples)
+          ? s.samples
+              .filter(
+                (x: any) => x && typeof x.ts === "number" && Number.isFinite(x.pnl)
+              )
+              .map((x: any) => ({ ts: x.ts, pnl: x.pnl }))
+          : [];
+        // Retention: drop positions with no activity within the retention period.
+        const lastTs = samples.length
+          ? Math.max(...samples.map((x) => x.ts))
+          : 0;
+        if (now - lastTs > this.statsRetentionMs) continue;
+
+        this.stats.set(String(s.positionId), {
+          positionId: String(s.positionId),
+          symbol: String(s.symbol ?? ""),
+          positionType: s.positionType === 2 ? 2 : 1,
+          openType: s.openType === 2 ? 2 : 1,
+          leverage: toFiniteNumber(s.leverage) || 0,
+          openAvgPrice: toFiniteNumber(s.openAvgPrice),
+          margin: toFiniteNumber(s.margin) || 0,
+          samples,
+        });
+      }
+
+      // Apply the trailing window pruning on load (consistent with live sampling).
+      const cutoff = now - this.windowMs;
+      for (const [id, st] of this.stats) {
+        st.samples = st.samples.filter((x) => x.ts >= cutoff);
+        if (st.samples.length === 0) this.stats.delete(id);
+      }
+
+      if (this.stats.size > 0) {
+        this.logger.info(
+          `📂 Restored ${this.stats.size} position stats from ${this.statsFilePath}`
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        "⚠️ Could not load persisted position stats — starting fresh:",
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+
+  /**
+   * Persist the tracked per-position stats to disk. Throttled to avoid disk
+   * churn on the sampling cadence; pass `force` to bypass the throttle (used
+   * on shutdown).
+   */
+  private persistStats(force = false): void {
+    if (this.savingStats) return;
+    const now = Date.now();
+    if (!force && now - this.lastStatsSave < this.STATS_SAVE_THROTTLE_MS) return;
+    this.lastStatsSave = now;
+    this.savingStats = true;
+    try {
+      const data = {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        stats: Array.from(this.stats.values()),
+      };
+      const dir = path.dirname(this.statsFilePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(this.statsFilePath, JSON.stringify(data), "utf-8");
+    } catch (error) {
+      this.logger.warn(
+        "⚠️ Could not persist position stats:",
+        error instanceof Error ? error.message : error
+      );
+    } finally {
+      this.savingStats = false;
+    }
+  }
+
   // ── Alert helpers ─────────────────────────────────────────────────
 
   /**
-   * Parse the current-orders response into a list of pending STOP/entry
-   * orders. Tolerates several response envelopes (`data` as array, or under
-   * `currentOrders` / `list` / `orders`) and keeps only open-*entry* orders
-   * (side 1 or 3) — i.e. the pending STOPs, not SL/TP closes.
+   * Parse the pending plan-orders response into a list of `PendingOrderSummary`.
+   * Tolerates several response envelopes (`data` as array, or under
+   * `planOrders` / `list` / `orders`) and keeps every side — both open-side
+   * stop/trigger entries (1/3) and close-side TP/SL orders (2/4).
    */
   private extractPendingOrders(res: any): PendingOrderSummary[] {
     const raw = res?.data;
     let list: any[] = [];
     if (Array.isArray(raw)) list = raw;
-    else if (Array.isArray(raw?.currentOrders)) list = raw.currentOrders;
+    else if (Array.isArray(raw?.planOrders)) list = raw.planOrders;
     else if (Array.isArray(raw?.orders)) list = raw.orders;
     else if (Array.isArray(raw?.list)) list = raw.list;
 
@@ -382,11 +497,12 @@ export class PositionSummaryMonitor {
     for (const o of list) {
       if (!o || typeof o !== "object") continue;
       const side = Number(o.side);
-      if (side !== 1 && side !== 3) continue; // entry orders only
+      if (side < 1 || side > 4) continue;
 
-      const orderId = String(o.orderId ?? o.id ?? "");
+      const orderId = String(o.planOrderId ?? o.orderId ?? o.id ?? "");
       const symbol = String(o.symbol ?? "");
       const triggerPrice = toFiniteNumber(o.triggerPrice ?? o.stopPrice);
+      const triggerType = Number(o.triggerType) === 2 ? 2 : 1;
       const vol = toFiniteNumber(o.vol);
       if (!orderId || !symbol || !Number.isFinite(triggerPrice) || !Number.isFinite(vol) || vol <= 0) {
         continue;
@@ -395,7 +511,8 @@ export class PositionSummaryMonitor {
       out.push({
         orderId,
         symbol,
-        side: side as 1 | 3,
+        side: side as 1 | 2 | 3 | 4,
+        triggerType,
         triggerPrice,
         vol,
         leverage: toFiniteNumber(o.leverage) || 0,

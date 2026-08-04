@@ -118,39 +118,37 @@ export interface SubmitOrderResponse {
   data?: string | number; // Order ID — large ids exceed 2^53 and are returned as exact strings; use String(data)
 }
 
-// ── Current (Open) Orders ───────────────────────────────────────────
-// MEXC endpoint: GET /api/v1/private/order/list/current_orders
-// Returns currently open (unfilled) orders, including pending STOP entries.
+// ── Pending Plan Orders (TP/SL + trigger entries) ───────────────────
+// MEXC endpoint: GET /api/v1/private/planorder/list/pending
+// Returns pending plan orders: attached TP/SL orders (close-side) AND
+// stop/trigger entry orders (open-side) that have not yet fired.
 
-export interface CurrentOrder {
-  /** Order ID — large ids exceed 2^53, use String(). */
-  orderId: string | number;
+export interface PendingPlanOrder {
+  /** Plan order ID — large ids exceed 2^53, use String(). */
+  planOrderId: string | number;
   symbol: string;
   /** 1=open long, 2=close short, 3=open short, 4=close long */
   side: number;
-  /** Order type (5 = market/plan) */
-  type?: number | string;
-  /** Original volume */
+  /** 1=fires when price >= triggerPrice, 2=fires when price <= triggerPrice */
+  triggerType: number;
+  /** Price that triggers the order */
+  triggerPrice: number | string;
+  /** Execution order type after trigger (5 = market) */
+  orderType?: number;
   vol: number | string;
-  /** Filled volume */
-  dealVol?: number | string;
-  /** Limit price (0 for market) */
-  price?: number | string;
-  /** Trigger price for STOP orders (some deployments use `stopPrice`) */
-  triggerPrice?: number | string;
-  stopPrice?: number | string;
   leverage?: number;
-  openType?: number;
-  status?: number | string;
+  openType?: 1 | 2;
+  stopLossPrice?: number | string;
+  takeProfitPrice?: number | string;
+  executeCycle?: number;
   createTime?: number;
-  updateTime?: number;
 }
 
 /**
- * The response envelope may vary (array, `{ currentOrders }`, `{ list }`),
- * so `data` is typed loosely and parsed defensively by the consumer.
+ * The response envelope may vary (array, `{ planOrders }`, `{ list }`), so
+ * `data` is typed loosely and parsed defensively by the consumer.
  */
-export interface CurrentOrdersResponse {
+export interface PendingPlanOrdersResponse {
   success: boolean;
   code: number;
   message?: string;

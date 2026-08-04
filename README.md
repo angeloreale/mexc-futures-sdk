@@ -232,7 +232,8 @@ Entry: 67,000.00 → Exit: 69,000.00
 
 Every `SUMMARY_INTERVAL_HOURS` (default `8`), the bot sends a summary of the current account state to the summary channel, showing:
 
-- **Open positions** — symbol, direction, leverage, entry price, **current PNL**, and the **max / min PNL** reached over the trailing `SUMMARY_WINDOW_HOURS` (default `4` hours)
+- **Open positions** — symbol, direction, leverage, entry price, **current PNL**, and the **max / min PNL** reached over the trailing `SUMMARY_WINDOW_HOURS` (default `4` hours), plus each position's **position ID**
+- **Pending orders** — one line per pending STOP (entry) order: symbol, direction, trigger price, volume and a shortened **order ID**
 - **Available balance** and **equity**
 
 Example message:
@@ -247,15 +248,23 @@ Example message:
 Entry: 67,000.00
 PNL: +176.70 USDT
    max +210.10 / min -5.30 USDT
+🆔 5839201
 ──────────────
 🔴 ETH_USDT SHORT · 5x
 Entry: 3,500.00
 PNL: -12.00 USDT
    max +40.50 / min -15.20 USDT
+🆔 2948573
+
+📌 Pending Orders (2)
+🟡 TAO_USDT LONG · STOP ≥187.54 · 0.50 · <code>…397504</code>
+🟡 ETH_USDT SHORT · SL ≥1,884.95 · 0.17 · <code>…2904</code>
 
 💼 Available: 1,234.56 USDT
 📈 Equity: 5,678.90 USDT
 ```
+
+Pending orders are the plan orders currently open on the exchange — attached **TP/SL orders** and **stop/trigger entries** — fetched from the futures API (`/private/planorder/list/pending`). Each is shown on one line with its direction, TP/SL vs STOP label, trigger condition (`≥`/`≤`), volume and a shortened order ID. Order/position IDs are shown shortened for a compact layout — the full IDs appear in the order-placed alerts.
 
 **Setup:**
 

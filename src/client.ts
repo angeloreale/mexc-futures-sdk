@@ -26,7 +26,7 @@ import {
   SubmitPlanOrderRequest,
   SubmitPlanOrderResponse,
   GetOrderResponse,
-  CurrentOrdersResponse,
+  PendingPlanOrdersResponse,
 } from "./types/orders";
 import {
   RiskLimit,
@@ -485,15 +485,14 @@ export class MexcFuturesSDK {
   }
 
   /**
-   * Get currently open (unfilled) orders, including pending STOP entries.
-   * @param symbol Optional contract symbol to filter by
+   * Get pending plan orders — attached TP/SL orders AND stop/trigger entry
+   * orders that have not yet fired.
    */
-  async getOpenOrders(symbol?: string): Promise<CurrentOrdersResponse> {
+  async getPendingPlanOrders(): Promise<PendingPlanOrdersResponse> {
     try {
-      const params = symbol ? { symbol } : {};
-      const response = await this.httpClient.get(ENDPOINTS.CURRENT_ORDERS, {
-        params,
-      });
+      const response = await this.httpClient.get(
+        ENDPOINTS.GET_PENDING_PLAN_ORDERS
+      );
       return response.data;
     } catch (error) {
       // Error is already logged by the interceptor with user-friendly message

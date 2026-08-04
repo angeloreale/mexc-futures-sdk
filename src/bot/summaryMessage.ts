@@ -33,9 +33,22 @@ function shortId(id: string, tail = 6): string {
 }
 
 /**
+ * Label a pending plan order: open-side (1/3) are STOP/trigger entries;
+ * close-side (2/4) are attached TP/SL orders.
+ *
+ *   side 4 (close long): trigger ≥ → TP, trigger ≤ → SL
+ *   side 2 (close short): trigger ≥ → SL, trigger ≤ → TP
+ */
+function planOrderKind(side: 1 | 2 | 3 | 4, triggerType: 1 | 2): string {
+  if (side === 1 || side === 3) return "STOP";
+  if (side === 4) return triggerType === 1 ? "TP" : "SL";
+  return triggerType === 1 ? "SL" : "TP";
+}
+
+/**
  * Build the Telegram message for the periodic position summary.
  * Includes open positions (with current / max / min PNL over the window,
- * plus their position IDs), pending STOP orders (one line each with their
+ * plus their position IDs), pending plan orders (one line each with their
  * order IDs), and the account balance + equity. HTML format.
  */
 export function formatPositionSummaryMessage(summary: PositionSummary): string {
@@ -64,15 +77,17 @@ export function formatPositionSummaryMessage(summary: PositionSummary): string {
   }
   lines.push(``);
 
-  // ── Pending (STOP) orders ────────────────────────────────────────
+  // ── Pending plan orders (TP/SL + trigger entries) ───────────────
   lines.push(`📌 <b>Pending Orders (${summary.pendingOrders.length})</b>`);
   if (summary.pendingOrders.length === 0) {
     lines.push(`No pending orders`);
   } else {
     for (const o of summary.pendingOrders) {
-      const dir = o.side === 1 ? "LONG" : "SHORT";
+      const dir = o.side === 1 || o.side === 4 ? "LONG" : "SHORT";
+      const kind = planOrderKind(o.side, o.triggerType);
+      const arrow = o.triggerType === 1 ? "≥" : "≤";
       lines.push(
-        `🟡 ${o.symbol} ${dir} · STOP @ ${fmt(o.triggerPrice)} · ${fmt(o.vol)} · <code>${shortId(o.orderId)}</code>`
+        `🟡 ${o.symbol} ${dir} · ${kind} ${arrow}${fmt(o.triggerPrice)} · ${fmt(o.vol)} · <code>${shortId(o.orderId)}</code>`
       );
     }
   }

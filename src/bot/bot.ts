@@ -104,6 +104,8 @@ export class SignalBot {
         slTpStore: this.slTpStore,
         onAlert: (alert) => this.sendPositionAlert(alert),
         slTpRetentionDays: config.logRetentionDays,
+        statsFilePath: config.summaryStatsFilePath,
+        statsRetentionDays: config.logRetentionDays,
       });
     }
 

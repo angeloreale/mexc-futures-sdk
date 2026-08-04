@@ -133,6 +133,9 @@ export interface BotConfig {
   /** State file path for idempotency */
   stateFilePath: string;
 
+  /** JSON file persisting per-position min/max PNL stats across restarts. */
+  summaryStatsFilePath: string;
+
   /** Directory for persistent log files (signals, trades, bot). */
   logDir: string;
 

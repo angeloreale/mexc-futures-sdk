@@ -55,6 +55,12 @@ export function loadConfig(): BotConfig {
   const logDir = env.LOG_DIR || "./logs";
   const logRetentionDays = parseInt(env.LOG_RETENTION_DAYS || "90", 10);
 
+  // JSON file persisting per-position min/max PNL stats across restarts.
+  // Defaults to a sibling of the state file: e.g. bot-summary-stats.json.
+  const summaryStatsFilePath =
+    (env.SUMMARY_STATS_FILE_PATH || "").trim() ||
+    stateFilePath.replace(/\.json$/i, "") + "-summary-stats.json";
+
   // Position-close PNL notifications (optional — empty disables the feature)
   const pnlNotificationChannel = (env.PNL_NOTIFICATION_CHANNEL || "").trim();
   const positionMonitorIntervalSeconds = parseInt(
@@ -93,6 +99,7 @@ export function loadConfig(): BotConfig {
     logLevel,
     baseCurrency,
     stateFilePath,
+    summaryStatsFilePath,
     logDir,
     logRetentionDays,
     pnlNotificationChannel,

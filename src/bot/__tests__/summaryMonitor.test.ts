@@ -1,3 +1,6 @@
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import {
   PositionSummaryMonitor,
   PositionSummary,
@@ -8,6 +11,15 @@ import { Position } from "../../types/account";
 import { SlTpStore } from "../slTpStore";
 
 const logger = new Logger({ level: "SILENT" });
+
+let statsFileCounter = 0;
+function tempStatsFile(): string {
+  statsFileCounter += 1;
+  return path.join(
+    os.tmpdir(),
+    `mexc-summary-stats-${process.pid}-${Date.now()}-${statsFileCounter}.json`
+  );
+}
 
 function makePosition(overrides?: Partial<Position>): Position {
   return {
@@ -39,7 +51,8 @@ function makeMonitor(
   client: any,
   store: SlTpStore,
   onSummary: jest.Mock,
-  onAlert: jest.Mock
+  onAlert: jest.Mock,
+  opts: Partial<ConstructorParameters<typeof PositionSummaryMonitor>[0]> = {}
 ) {
   return new PositionSummaryMonitor({
     client,
@@ -52,6 +65,9 @@ function makeMonitor(
     slTpStore: store,
     onAlert,
     slTpRetentionDays: 90,
+    statsFilePath: tempStatsFile(),
+    statsRetentionDays: 90,
+    ...opts,
   });
 }
 
@@ -68,7 +84,7 @@ describe("PositionSummaryMonitor", () => {
     client = {
       getOpenPositions: jest.fn(),
       getAccountAsset: jest.fn(),
-      getOpenOrders: jest.fn().mockResolvedValue({ data: [] }),
+      getPendingPlanOrders: jest.fn().mockResolvedValue({ data: [] }),
     };
   });
 
@@ -286,6 +302,8 @@ describe("PositionSummaryMonitor", () => {
       slTpStore: store,
       onAlert,
       slTpRetentionDays: 1,
+      statsFilePath: tempStatsFile(),
+      statsRetentionDays: 1,
     });
 
     expect(store.get("OLD_BTC")).toBeDefined();
@@ -338,20 +356,22 @@ describe("PositionSummaryMonitor", () => {
     expect(summary.openPositions[0].minPnl).toBe(-4);
   });
 
-  it("includes pending (entry-side) open orders in the summary", async () => {
+  it("includes pending plan orders (TP/SL + trigger entries) in the summary", async () => {
     client.getOpenPositions.mockResolvedValue({
       data: [makePosition({ unRealizedPnl: 1 })],
     });
     client.getAccountAsset.mockResolvedValue({
       data: { availableBalance: 1, equity: 2 },
     });
-    // current_orders: includes two entry STOPs + a close-side SL order
-    client.getOpenOrders.mockResolvedValue({
+    client.getPendingPlanOrders.mockResolvedValue({
       data: {
-        currentOrders: [
-          { orderId: "817027833053397504", symbol: "TAO_USDT", side: 1, triggerPrice: "187.54", vol: "0.5", openType: 1, leverage: 10 },
-          { orderId: "55", symbol: "ETH_USDT", side: 3, triggerPrice: 3400, vol: 2, openType: 1, leverage: 5 },
-          { orderId: "66", symbol: "ETH_USDT", side: 4, triggerPrice: 3450, vol: 2, openType: 1, leverage: 5 }, // close-side → excluded
+        planOrders: [
+          // trigger entry (open long)
+          { planOrderId: "817027833053397504", symbol: "TAO_USDT", side: 1, triggerType: 1, triggerPrice: "187.54", vol: "0.5", openType: 1, leverage: 10 },
+          // TP order on a long (close long, fires below)
+          { planOrderId: "88", symbol: "XLM_USDT", side: 4, triggerType: 2, triggerPrice: 0.1788, vol: 110, openType: 1, leverage: 10 },
+          // SL order on a short (close short, fires above)
+          { planOrderId: "99", symbol: "ETH_USDT", side: 2, triggerType: 1, triggerPrice: 1884.95, vol: 0.17, openType: 1, leverage: 30 },
         ],
       },
     });
@@ -361,27 +381,35 @@ describe("PositionSummaryMonitor", () => {
     await monitor.emitSummary();
 
     const summary: PositionSummary = onSummary.mock.calls[0][0];
-    expect(summary.pendingOrders).toHaveLength(2);
+    expect(summary.pendingOrders).toHaveLength(3);
     expect(summary.pendingOrders[0]).toMatchObject({
       orderId: "817027833053397504",
       symbol: "TAO_USDT",
       side: 1,
+      triggerType: 1,
       triggerPrice: 187.54,
       vol: 0.5,
       leverage: 10,
     });
-    expect(summary.pendingOrders[1].symbol).toBe("ETH_USDT");
-    expect(summary.pendingOrders[1].side).toBe(3);
+    expect(summary.pendingOrders[1]).toMatchObject({
+      symbol: "XLM_USDT",
+      side: 4,
+      triggerType: 2,
+      triggerPrice: 0.1788,
+      vol: 110,
+    });
+    expect(summary.pendingOrders[2].symbol).toBe("ETH_USDT");
+    expect(summary.pendingOrders[2].side).toBe(2);
   });
 
-  it("degrades gracefully when the open-orders fetch fails", async () => {
+  it("degrades gracefully when the pending plan-orders fetch fails", async () => {
     client.getOpenPositions.mockResolvedValue({
       data: [makePosition({ unRealizedPnl: 1 })],
     });
     client.getAccountAsset.mockResolvedValue({
       data: { availableBalance: 1, equity: 2 },
     });
-    client.getOpenOrders.mockRejectedValue(new Error("rate limited"));
+    client.getPendingPlanOrders.mockRejectedValue(new Error("rate limited"));
 
     const monitor = makeMonitor(client, store, onSummary, onAlert);
     await monitor.sample();
