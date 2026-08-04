@@ -1,6 +1,7 @@
 import { MexcFuturesSDK } from "../client";
 import { Position } from "../types/account";
 import { Logger } from "../utils/logger";
+import { toFiniteNumber } from "../utils/numbers";
 
 /**
  * Data about a position that just closed, enough to report realized PNL.
@@ -210,8 +211,8 @@ export class PositionClosureMonitor {
       const asset = await this.client.getAccountAsset(this.baseCurrency);
       const inner: any = asset.data ?? asset;
       account = {
-        availableBalance: inner.availableBalance ?? NaN,
-        equity: inner.equity ?? NaN,
+        availableBalance: toFiniteNumber(inner.availableBalance),
+        equity: toFiniteNumber(inner.equity),
         currency: this.baseCurrency,
       };
     } catch (error) {

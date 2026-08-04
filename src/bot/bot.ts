@@ -17,9 +17,15 @@ import { formatPositionClosedMessage } from "./pnlMessage";
 import {
   PositionSummaryMonitor,
   PositionSummary,
+  PositionAlert,
 } from "./summaryMonitor";
 import { formatPositionSummaryMessage } from "./summaryMessage";
 import { formatOrderPlacedMessage } from "./orderMessage";
+import { formatPositionAlertMessage } from "./alertMessage";
+import { formatPositionCloseMessage, PositionCloseResult } from "./closeMessage";
+import { SlTpStore } from "./slTpStore";
+import { Position } from "../types/account";
+import { GetOrderResponse } from "../types/orders";
 
 /**
  * Main Telegram Signal Bot.
@@ -38,6 +44,8 @@ export class SignalBot {
   private pnlMonitor: PositionClosureMonitor | null = null;
   /** Periodically samples open positions and sends a summary (null when disabled). */
   private summaryMonitor: PositionSummaryMonitor | null = null;
+  /** SL/TP levels per symbol, populated on order execution, consumed by the monitor for alerts. */
+  private slTpStore = new SlTpStore();
   /** Cache account equity for 10s to avoid rate limits on rapid signals. */
   private equityCache: { equity: number; ts: number } | null = null;
   private readonly EQUITY_CACHE_TTL_MS = 10_000;
@@ -76,8 +84,10 @@ export class SignalBot {
         logger: this.logger,
         baseCurrency: config.baseCurrency,
         intervalSeconds: config.positionMonitorIntervalSeconds,
-        onClose: (info, account) =>
-          this.sendPositionClosedNotification(info, account),
+        onClose: (info, account) => {
+          this.slTpStore.remove(info.symbol);
+          this.sendPositionClosedNotification(info, account);
+        },
       });
     }
 
@@ -91,6 +101,9 @@ export class SignalBot {
         windowHours: config.summaryWindowHours,
         intervalHours: config.summaryIntervalHours,
         onSummary: (summary) => this.sendPositionSummary(summary),
+        slTpStore: this.slTpStore,
+        onAlert: (alert) => this.sendPositionAlert(alert),
+        slTpRetentionDays: config.logRetentionDays,
       });
     }
 
@@ -222,6 +235,72 @@ export class SignalBot {
   }
 
   /**
+   * Send a >50%-toward-SL/TP alert to the summary channel.
+   */
+  private async sendPositionAlert(alert: PositionAlert): Promise<void> {
+    const channel = this.config.summaryNotificationChannel;
+    if (!channel) return;
+    const text = formatPositionAlertMessage(alert);
+    try {
+      await this.telegram.telegram.sendMessage(channel, text, {
+        parse_mode: "HTML",
+      });
+      this.logger.info(
+        `🚨 Position alert sent to ${channel}: ${alert.symbol} ${alert.target}`
+      );
+    } catch (error) {
+      this.logger.error(
+        "❌ Failed to send position alert:",
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+
+  /**
+   * Send the result of a `Close {orderId}` command.
+   */
+  private async sendCloseResult(res: PositionCloseResult): Promise<void> {
+    const channel =
+      this.config.summaryNotificationChannel ||
+      this.config.pnlNotificationChannel;
+    if (!channel) return;
+    const text = formatPositionCloseMessage(res);
+    try {
+      await this.telegram.telegram.sendMessage(channel, text, {
+        parse_mode: "HTML",
+      });
+    } catch (error) {
+      this.logger.error(
+        "❌ Failed to send close result:",
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+
+  /**
+   * Store the SL/TP levels from a successfully placed trade so the summary
+   * monitor can evaluate >50%-of-way alerts for the resulting position.
+   */
+  private registerSlTp(record: TradeRecord): void {
+    const t = record.resolved;
+    // Nearest TP: first target for the direction (lowest for LONG, highest for SHORT).
+    const tps =
+      t.allTpTargets.length > 0 ? t.allTpTargets : [t.takeProfitPrice];
+    const nearestTp =
+      t.side === 1 ? Math.min(...tps) : Math.max(...tps);
+
+    this.slTpStore.set(t.mexcSymbol, {
+      sl: t.stopLossPrice,
+      tp: nearestTp,
+      positionType: t.side === 1 ? 1 : 2,
+      setAt: Date.now(),
+    });
+    this.logger.info(
+      `💾 SL/TP stored for ${t.mexcSymbol}: SL=${t.stopLossPrice} TP=${nearestTp}`
+    );
+  }
+
+  /**
    * True when the message is the on-demand summary command
    * "CHECK POSITIONS" (case-insensitive, whitespace-tolerant).
    */
@@ -262,6 +341,131 @@ export class SignalBot {
       "📊 CHECK POSITIONS received — emitting summary immediately"
     );
     await this.summaryMonitor.emitSummary();
+  }
+
+  /**
+   * Close a position immediately by its MEXC official order ID.
+   * Resolves via the MEXC `getOrder` API (no local order-ID storage).
+   */
+  private async handleClosePosition(
+    orderId: string,
+    chatId: string,
+    messageId: number
+  ): Promise<void> {
+    if (this.state.isProcessed(chatId, messageId)) {
+      this.logger.debug(`⏭️ Close ${orderId} already processed`);
+      return;
+    }
+    this.state.markProcessed(chatId, messageId);
+
+    this.logger.info(`🔚 Close requested for order ${orderId}`);
+
+    // 1. Resolve the order via MEXC API.
+    let orderRes: GetOrderResponse;
+    try {
+      orderRes = await this.mexcClient.getOrder(orderId);
+    } catch (error) {
+      this.logger.error(
+        `❌ Failed to fetch order ${orderId}:`,
+        error instanceof Error ? error.message : error
+      );
+      await this.sendCloseResult({
+        status: "unknown",
+        queriedId: orderId,
+      });
+      return;
+    }
+
+    const data: any = (orderRes as any).data ?? orderRes;
+    const symbol: string = data?.symbol ?? "";
+    const side: number | undefined = data?.side;
+    const positionType: 1 | 2 | undefined =
+      side === 1 || side === 3 ? 1 : side === 2 || side === 4 ? 2 : undefined;
+    if (!symbol || !positionType) {
+      this.logger.error(
+        `❌ Could not resolve order ${orderId} to a symbol/positionType`
+      );
+      await this.sendCloseResult({
+        status: "unknown",
+        queriedId: orderId,
+      });
+      return;
+    }
+
+    // 2. Find the matching open position.
+    let positions: Position[] = [];
+    try {
+      const res = await this.mexcClient.getOpenPositions();
+      positions = Array.isArray(res.data) ? res.data : [];
+    } catch (error) {
+      this.logger.error(
+        "❌ Failed to fetch open positions for close:",
+        error instanceof Error ? error.message : error
+      );
+      await this.sendCloseResult({
+        status: "error",
+        queriedId: orderId,
+        symbol,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+
+    const position = positions.find(
+      (p) =>
+        p.symbol === symbol &&
+        p.positionType === positionType &&
+        p.state !== 3 &&
+        p.holdVol > 0
+    );
+    if (!position) {
+      await this.sendCloseResult({
+        status: "not-open",
+        queriedId: orderId,
+        symbol,
+      });
+      return;
+    }
+
+    // 3. Resolve current price for market close.
+    let currentPrice = 0;
+    try {
+      const ticker = await this.mexcClient.getTicker(symbol);
+      currentPrice = ticker?.data?.lastPrice ?? 0;
+    } catch {
+      // fall through with 0; MEXC market orders accept price=0
+    }
+
+    // 4. Close.
+    const result = await this.executor.closePosition(
+      symbol,
+      position,
+      currentPrice,
+      positionType,
+      position.openType,
+      position.leverage
+    );
+
+    if (result.success) {
+      this.slTpStore.remove(symbol);
+      await this.sendCloseResult({
+        status: this.config.dryRun ? "dry-run" : "success",
+        queriedId: orderId,
+        symbol,
+        positionType,
+        leverage: position.leverage,
+        volume: position.holdVol,
+        price: currentPrice || undefined,
+        orderId: result.orderId,
+      });
+    } else {
+      await this.sendCloseResult({
+        status: "error",
+        queriedId: orderId,
+        symbol,
+        error: result.error,
+      });
+    }
   }
 
   /**
@@ -317,6 +521,14 @@ export class SignalBot {
     const chatUsername = msg.chat?.username;
     if (!this.isAllowedChannel(chatId, chatUsername)) {
       return; // silently ignore
+    }
+
+    // Close command: "Close {orderId}" — resolves the MEXC official order ID
+    // via the getOrder API, finds the matching open position, and closes it.
+    const closeMatch = /^close\s+(\S+)\s*$/i.exec(text.trim());
+    if (closeMatch) {
+      await this.handleClosePosition(closeMatch[1], chatId, messageId);
+      return;
     }
 
     this.logger.info(
@@ -550,6 +762,7 @@ export class SignalBot {
         // (skip in dry-run — no real order was submitted).
         if (!this.config.dryRun) {
           await this.sendOrderPlacedNotification(record);
+          this.registerSlTp(record);
         }
       } else {
         this.logger.error(
