@@ -353,8 +353,12 @@ export class PositionSummaryMonitor {
 
   /**
    * Assemble and emit the summary. Public so tests can drive it directly.
+   *
+   * @param forceFreshPending When true (e.g. an explicit CHECK POSITIONS
+   *                          command), always fetch pending orders from the
+   *                          plan/stop order APIs, bypassing the 30s cache.
    */
-  async emitSummary(): Promise<void> {
+  async emitSummary(forceFreshPending = false): Promise<void> {
     try {
       // Fresh open positions so the summary always reflects the current state,
       // merging in the tracked PNL stats (max/min) where available.
@@ -406,7 +410,7 @@ export class PositionSummaryMonitor {
       // Pending orders: tries the documented open-orders endpoint plus the
       // planorder/stoporder lists as fallbacks, merges and dedupes. Each
       // source fails independently and degrades gracefully.
-      const pendingOrders = await this.fetchPendingOrders();
+      const pendingOrders = await this.fetchPendingOrders(forceFreshPending);
 
       // Space before the next API call.
       await this.spaceRequest();
@@ -645,10 +649,14 @@ export class PositionSummaryMonitor {
    * 30-second cache so rapid CHECK POSITIONS commands don't rate-limit the API.
    * Each source fails independently; requests are made sequentially to avoid
    * burst rate-limiting from MEXC.
+   *
+   * @param forceFresh When true, bypasses the cache and always fetches from the
+   *                   plan/stop order APIs (used for explicit CHECK POSITIONS).
    */
-  private async fetchPendingOrders(): Promise<PendingOrderSummary[]> {
+  private async fetchPendingOrders(forceFresh = false): Promise<PendingOrderSummary[]> {
     const now = Date.now();
     if (
+      !forceFresh &&
       this.pendingOrdersCache &&
       now - this.pendingOrdersCache.ts < this.PENDING_CACHE_TTL_MS
     ) {

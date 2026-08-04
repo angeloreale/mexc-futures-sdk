@@ -352,7 +352,9 @@ export class SignalBot {
     this.logger.info(
       "📊 CHECK POSITIONS received — emitting summary immediately"
     );
-    await this.summaryMonitor.emitSummary();
+    // Force a fresh fetch of pending (plan/trigger) orders — the summary
+    // should reflect live Trigger-order state, not the 30s cache.
+    await this.summaryMonitor.emitSummary(true);
   }
 
   /**
