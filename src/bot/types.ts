@@ -126,4 +126,10 @@ export interface BotConfig {
 
   /** Days to retain log files (default 90). */
   logRetentionDays: number;
+
+  /** Telegram channel/chat ID to receive position-close PNL notifications (empty = disabled). */
+  pnlNotificationChannel: string;
+
+  /** How often (seconds) to poll MEXC for closed positions (min 5, default 30). */
+  positionMonitorIntervalSeconds: number;
 }

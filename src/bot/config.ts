@@ -55,6 +55,13 @@ export function loadConfig(): BotConfig {
   const logDir = env.LOG_DIR || "./logs";
   const logRetentionDays = parseInt(env.LOG_RETENTION_DAYS || "90", 10);
 
+  // Position-close PNL notifications (optional — empty disables the feature)
+  const pnlNotificationChannel = (env.PNL_NOTIFICATION_CHANNEL || "").trim();
+  const positionMonitorIntervalSeconds = parseInt(
+    env.POSITION_MONITOR_INTERVAL_SECONDS || "30",
+    10
+  );
+
   const config: BotConfig = {
     mexcApiKey,
     mexcSecretKey,
@@ -74,6 +81,8 @@ export function loadConfig(): BotConfig {
     stateFilePath,
     logDir,
     logRetentionDays,
+    pnlNotificationChannel,
+    positionMonitorIntervalSeconds,
   };
 
   validate(config);
@@ -117,6 +126,11 @@ function validate(config: BotConfig): void {
   if (config.logRetentionDays < 1) {
     throw new Error(
       `LOG_RETENTION_DAYS must be >= 1, got ${config.logRetentionDays}`
+    );
+  }
+  if (config.positionMonitorIntervalSeconds < 5) {
+    throw new Error(
+      `POSITION_MONITOR_INTERVAL_SECONDS must be >= 5, got ${config.positionMonitorIntervalSeconds}`
     );
   }
 }

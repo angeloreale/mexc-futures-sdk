@@ -21,6 +21,7 @@ A TypeScript SDK for MEXC Futures trading with REST API and WebSocket support, p
   - [Signal Formats](#signal-formats)
   - [Configuration Reference](#configuration-reference)
   - [Running Locally](#running-locally)
+  - [Position-Close Notifications](#-position-close-notifications)
 - [Creating the Telegram Bot & Adding Channels](#-creating-the-telegram-bot--adding-channels)
 - [Remote Server Deployment](#-remote-server-deployment)
   - [Option A: Manual Setup (Ubuntu/Debian)](#option-a-manual-setup-ubuntudebian)
@@ -146,6 +147,9 @@ All settings are environment variables. Copy `.env.example` and fill in:
 | `BASE_CURRENCY` | `USDT` | Base currency for equity checks |
 | `STATE_FILE_PATH` | `./bot-state.json` | Idempotency state file location |
 | `MEXC_AUTH_TOKEN` | — | Legacy: browser WEB token (not needed with API keys) |
+| **Position-Close Notifications** | | |
+| `PNL_NOTIFICATION_CHANNEL` | *(empty)* | Channel/chat ID that receives realized PNL + balance updates when a position closes. Empty disables the feature |
+| `POSITION_MONITOR_INTERVAL_SECONDS` | `30` | How often (s) to poll MEXC for closed positions (min 5) |
 
 ### Running Locally
 
@@ -163,6 +167,36 @@ npm run bot:start
 2. Check logs for symbol normalization and contract resolution
 3. Once confident, set `DRY_RUN=false` and `TRADING_ENABLED=true`
 4. Monitor your first few trades closely
+
+### 📨 Position-Close Notifications
+
+When a position closes (TP, SL, or manual close), the bot can send a summary to a **separate channel of your choice**, showing:
+
+- **Realized PNL** — the amount in USDT plus the return as a % of the position's initial margin
+- **Entry → Exit** prices, direction (LONG/SHORT), leverage and margin mode
+- **Available balance** and **equity** after the close
+
+Example message:
+
+```
+📊 POSITION CLOSED
+
+🪙 BTC_USDT · LONG · 10x · Isolated
+Entry: 67,000.00 → Exit: 69,000.00
+
+📈 Realized PNL: +176.70 USDT (+5.12%)
+
+💼 Available: 1,234.56 USDT
+📈 Equity: 5,678.90 USDT
+```
+
+**Setup:**
+
+1. Set `PNL_NOTIFICATION_CHANNEL` in `.env` to the channel/chat ID you want the notifications sent to (numeric or `@username`). Leave it empty to disable the feature.
+2. Add your bot as an **admin** in the notification channel (otherwise sending will be forbidden).
+3. Optionally tune `POSITION_MONITOR_INTERVAL_SECONDS` (default `30`, min `5`) — how often the bot polls MEXC to detect a closed position.
+
+> 💡 The monitor detects **any** position on your account that closes — whether opened by the bot or manually. On startup it seeds its known-position list, so positions that already closed while the bot was offline won't trigger notifications.
 
 ---
 

@@ -24,6 +24,8 @@ const defaultConfig: BotConfig = {
   stateFilePath: "/tmp/test-state.json",
   logDir: "/tmp/test-logs",
   logRetentionDays: 90,
+  pnlNotificationChannel: "",
+  positionMonitorIntervalSeconds: 30,
 };
 
 function makeContract(overrides?: Partial<ContractDetail>): ContractDetail {
