@@ -157,13 +157,16 @@ export class SignalBot {
     const shutdown = async (signal: string) => {
       this.logger.info(`\n🛑 Received ${signal} — shutting down...`);
       this.pnlMonitor?.stop();
-      this.summaryMonitor?.stop();
+      if (this.summaryMonitor) {
+        await this.summaryMonitor.stop();
+      }
       this.telegram.stop(signal);
+      this.logger.info("🛑 Shutdown complete — flushing logs...");
       await this.logger.close();
       process.exit(0);
     };
-    process.once("SIGINT", () => shutdown("SIGINT"));
-    process.once("SIGTERM", () => shutdown("SIGTERM"));
+    process.once("SIGINT", () => { void shutdown("SIGINT"); });
+    process.once("SIGTERM", () => { void shutdown("SIGTERM"); });
 
     // Launch bot (long-polling)
     await this.telegram.launch();

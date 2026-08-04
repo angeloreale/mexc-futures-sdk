@@ -192,8 +192,8 @@ export class PositionSummaryMonitor {
     if (this.summaryTimer.unref) this.summaryTimer.unref();
   }
 
-  /** Stop both timers and flush persisted stats. */
-  stop(): void {
+  /** Stop both timers, run a final sample + summary flush, and persist stats. */
+  async stop(): Promise<void> {
     if (this.sampleTimer) {
       clearInterval(this.sampleTimer);
       this.sampleTimer = null;
@@ -201,6 +201,20 @@ export class PositionSummaryMonitor {
     if (this.summaryTimer) {
       clearInterval(this.summaryTimer);
       this.summaryTimer = null;
+    }
+
+    // Final sample and summary so the latest data is logged and persisted
+    // before the process exits.
+    try {
+      this.sampling = false; // reset guard so the final sample can run
+      await this.sample();
+      await this.emitSummary();
+      this.logger.info("📊 Final summary flushed on shutdown");
+    } catch (error) {
+      this.logger.warn(
+        "⚠️ Failed to flush final summary on shutdown:",
+        error instanceof Error ? error.message : error
+      );
     }
   }
 
