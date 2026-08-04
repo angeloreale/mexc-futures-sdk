@@ -296,7 +296,7 @@ export class Logger {
     if (!this.logDir) return;
     try {
       const cutoff = Date.now() - this.retentionDays * 24 * 60 * 60 * 1000;
-      const prefixRe = /^(signals|trades|bot|http)-(\d{4}-\d{2}-\d{2})\.log$/;
+      const prefixRe = /^(signals|trades|bot|http|ticker)-(\d{4}-\d{2}-\d{2})\.log$/;
 
       for (const entry of fs.readdirSync(this.logDir)) {
         const match = entry.match(prefixRe);

@@ -158,7 +158,8 @@ export class PositionSummaryMonitor {
   private sampling = false;
   /** Tracks which positions already alerted per target, to avoid repeat alerts. */
   private alerted = new Map<string, { sl: boolean; tp: boolean }>();
-  private pollLogged = false;
+  /** Previous unrealized PNL per position, used to compute per-poll deltas for console ticker logging. */
+  private prevPnl = new Map<string, number>();
   private pendingOrdersCache: { orders: PendingOrderSummary[]; ts: number } | null = null;
   private readonly PENDING_CACHE_TTL_MS = 30_000; // cache pending orders for 30s to avoid rate limits
 
@@ -185,14 +186,17 @@ export class PositionSummaryMonitor {
     );
     void this.sample();
     this.sampleTimer = setInterval(() => void this.sample(), this.sampleIntervalMs);
-    if (this.sampleTimer.unref) this.sampleTimer.unref();
 
     this.summaryTimer = setInterval(() => void this.emitSummary(), this.intervalMs);
-    if (this.summaryTimer.unref) this.summaryTimer.unref();
+
+    this.logger.info(
+      `⏱️ Polling timer set: sample every ${this.sampleIntervalMs / 1000}s, ` +
+        `summary every ${this.intervalMs / 3600000}h`
+    );
   }
 
-  /** Stop both timers and flush persisted stats. */
-  stop(): void {
+  /** Stop both timers, run a final sample + summary flush, and persist stats. */
+  async stop(): Promise<void> {
     if (this.sampleTimer) {
       clearInterval(this.sampleTimer);
       this.sampleTimer = null;
@@ -200,6 +204,20 @@ export class PositionSummaryMonitor {
     if (this.summaryTimer) {
       clearInterval(this.summaryTimer);
       this.summaryTimer = null;
+    }
+
+    // Final sample and summary so the latest data is logged and persisted
+    // before the process exits.
+    try {
+      this.sampling = false; // reset guard so the final sample can run
+      await this.sample();
+      await this.emitSummary();
+      this.logger.info("📊 Final summary flushed on shutdown");
+    } catch (error) {
+      this.logger.warn(
+        "⚠️ Failed to flush final summary on shutdown:",
+        error instanceof Error ? error.message : error
+      );
     }
   }
 
@@ -263,15 +281,38 @@ export class PositionSummaryMonitor {
       // Log ticker samples so a restart can restore them.
       this.logTickerEntries(active);
 
-      if (!this.pollLogged) {
-        this.pollLogged = true;
-        this.logger.info(
-          `📊 Polling active: ${active.length} open position(s)`
-        );
-      } else if (this.logger.isDebugEnabled()) {
-        this.logger.debug(
-          `📊 Polled ${active.length} open position(s) · tracking ${this.stats.size} PNL stat(s)`
-        );
+      // Log per-position PNL ticker to console at every poll.
+      for (const p of active) {
+        const id = String(p.positionId);
+        const pnl = toFiniteNumber(p.unRealizedPnl);
+        if (!Number.isFinite(pnl)) continue;
+
+        const dir = p.positionType === 1 ? "LONG" : "SHORT";
+        const prev = this.prevPnl.get(id);
+        const st = this.stats.get(id);
+        const maxPnl = st ? Math.max(...st.samples.map((s) => s.pnl)) : pnl;
+        const minPnl = st ? Math.min(...st.samples.map((s) => s.pnl)) : pnl;
+
+        if (prev !== undefined) {
+          const delta = pnl - prev;
+          const arrow = delta >= 0 ? "▲" : "▼";
+          this.logger.info(
+            `📈 ${p.symbol} ${dir} ${arrow} ${delta >= 0 ? "+" : ""}${delta.toFixed(2)} · ` +
+              `PNL ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)} · ` +
+              `max ${maxPnl >= 0 ? "+" : ""}${maxPnl.toFixed(2)} / min ${minPnl >= 0 ? "+" : ""}${minPnl.toFixed(2)}`
+          );
+        } else {
+          this.logger.info(
+            `📈 ${p.symbol} ${dir} · PNL ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)} · ` +
+              `max ${maxPnl >= 0 ? "+" : ""}${maxPnl.toFixed(2)} / min ${minPnl >= 0 ? "+" : ""}${minPnl.toFixed(2)}`
+          );
+        }
+        this.prevPnl.set(id, pnl);
+      }
+
+      // Clean up prevPnl for positions no longer active.
+      for (const id of Array.from(this.prevPnl.keys())) {
+        if (!seen.has(id)) this.prevPnl.delete(id);
       }
 
       // Evaluate >50%-toward-SL/TP alerts for positions with known targets.
@@ -291,11 +332,6 @@ export class PositionSummaryMonitor {
    * Assemble and emit the summary. Public so tests can drive it directly.
    */
   async emitSummary(): Promise<void> {
-    if (!this.sampleTimer) {
-      this.logger.debug(
-        "📊 Summary requested but monitor not started — polling timers are not running"
-      );
-    }
     try {
       // Fresh open positions so the summary always reflects the current state,
       // merging in the tracked PNL stats (max/min) where available.
@@ -380,6 +416,10 @@ export class PositionSummaryMonitor {
         `📊 Emitting position summary: ${openPositions.length} open position(s), ` +
           `${pendingOrders.length} pending order(s)`
       );
+
+      // Log full summary to console for local visibility.
+      this.logSummaryToConsole(summary);
+
       this.onSummary(summary);
     } catch (error) {
       this.logger.error(
@@ -387,6 +427,64 @@ export class PositionSummaryMonitor {
         error instanceof Error ? error.message : error
       );
     }
+  }
+
+  // ── Console summary helper ────────────────────────────────────────
+
+  /**
+   * Print a human-readable summary to the node console/log so operators
+   * can see the full account snapshot without checking Telegram.
+   */
+  private logSummaryToConsole(summary: PositionSummary): void {
+    const cur = summary.account.currency;
+    const fmtN = (n: number, d = 2) =>
+      Number.isFinite(n)
+        ? n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d })
+        : "—";
+    const fmtS = (n: number, d = 2) => {
+      if (!Number.isFinite(n)) return "—";
+      const sign = n > 0 ? "+" : n < 0 ? "-" : "";
+      return `${sign}${fmtN(Math.abs(n), d)}`;
+    };
+
+    this.logger.info("═══════════════════════════════════════════");
+    this.logger.info("  📊 POSITION SUMMARY");
+    this.logger.info(`  ⏱️  Last ${summary.windowHours}h · report every ${summary.intervalHours}h`);
+    this.logger.info("───────────────────────────────────────────");
+
+    if (summary.openPositions.length === 0) {
+      this.logger.info("  No open positions");
+    } else {
+      for (const p of summary.openPositions) {
+        const dir = p.positionType === 1 ? "LONG" : "SHORT";
+        const icon = p.currentPnl >= 0 ? "🟢" : "🔴";
+        this.logger.info(
+          `  ${icon} ${p.symbol} ${dir} ${p.leverage}x · Entry ${fmtN(p.openAvgPrice)} · ` +
+            `PNL ${fmtS(p.currentPnl)} ${cur} · max ${fmtS(p.maxPnl)} / min ${fmtS(p.minPnl)}`
+        );
+      }
+    }
+
+    if (summary.pendingOrders.length > 0) {
+      this.logger.info("───────────────────────────────────────────");
+      this.logger.info(`  📌 Pending Orders (${summary.pendingOrders.length})`);
+      for (const o of summary.pendingOrders) {
+        const dir = o.side === 1 || o.side === 4 ? "LONG" : "SHORT";
+        if (o.kind === "STOP") {
+          const arrow = o.triggerType === 1 ? "≥" : "≤";
+          this.logger.info(`  🟡 ${o.symbol} ${dir} STOP ${arrow}${fmtN(o.triggerPrice)}`);
+        } else {
+          const tp = Number.isFinite(o.takeProfitPrice) ? `TP ${fmtN(o.takeProfitPrice)}` : "";
+          const sl = Number.isFinite(o.stopLossPrice) ? `SL ${fmtN(o.stopLossPrice)}` : "";
+          this.logger.info(`  🟡 ${o.symbol} ${dir} ${[tp, sl].filter(Boolean).join(" / ")}`);
+        }
+      }
+    }
+
+    this.logger.info("───────────────────────────────────────────");
+    this.logger.info(`  💼 Available: ${fmtN(summary.account.availableBalance)} ${cur}`);
+    this.logger.info(`  📈 Equity: ${fmtN(summary.account.equity)} ${cur}`);
+    this.logger.info("═══════════════════════════════════════════");
   }
 
   // ── Ticker-{date}.log persistence helpers ─────────────────────────
