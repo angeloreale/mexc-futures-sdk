@@ -26,6 +26,9 @@ const defaultConfig: BotConfig = {
   logRetentionDays: 90,
   pnlNotificationChannel: "",
   positionMonitorIntervalSeconds: 30,
+  summaryNotificationChannel: "",
+  summaryIntervalHours: 8,
+  summaryWindowHours: 4,
 };
 
 function makeContract(overrides?: Partial<ContractDetail>): ContractDetail {

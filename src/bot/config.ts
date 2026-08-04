@@ -62,6 +62,13 @@ export function loadConfig(): BotConfig {
     10
   );
 
+  // Periodic position summaries (optional — falls back to the PNL channel)
+  const summaryNotificationChannel = (
+    (env.SUMMARY_NOTIFICATION_CHANNEL || "").trim() || pnlNotificationChannel
+  ).trim();
+  const summaryIntervalHours = parseFloat(env.SUMMARY_INTERVAL_HOURS || "8");
+  const summaryWindowHours = parseFloat(env.SUMMARY_WINDOW_HOURS || "4");
+
   const config: BotConfig = {
     mexcApiKey,
     mexcSecretKey,
@@ -83,6 +90,9 @@ export function loadConfig(): BotConfig {
     logRetentionDays,
     pnlNotificationChannel,
     positionMonitorIntervalSeconds,
+    summaryNotificationChannel,
+    summaryIntervalHours,
+    summaryWindowHours,
   };
 
   validate(config);
@@ -131,6 +141,16 @@ function validate(config: BotConfig): void {
   if (config.positionMonitorIntervalSeconds < 5) {
     throw new Error(
       `POSITION_MONITOR_INTERVAL_SECONDS must be >= 5, got ${config.positionMonitorIntervalSeconds}`
+    );
+  }
+  if (config.summaryIntervalHours < 1) {
+    throw new Error(
+      `SUMMARY_INTERVAL_HOURS must be >= 1, got ${config.summaryIntervalHours}`
+    );
+  }
+  if (config.summaryWindowHours < 1) {
+    throw new Error(
+      `SUMMARY_WINDOW_HOURS must be >= 1, got ${config.summaryWindowHours}`
     );
   }
 }

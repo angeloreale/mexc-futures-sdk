@@ -132,4 +132,13 @@ export interface BotConfig {
 
   /** How often (seconds) to poll MEXC for closed positions (min 5, default 30). */
   positionMonitorIntervalSeconds: number;
+
+  /** Telegram channel/chat ID for periodic position summaries (empty = falls back to pnlNotificationChannel). */
+  summaryNotificationChannel: string;
+
+  /** How often (hours) to send the position summary (default 8). */
+  summaryIntervalHours: number;
+
+  /** Trailing window (hours) for PNL max/min stats in the summary (default 4). */
+  summaryWindowHours: number;
 }

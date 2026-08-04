@@ -22,6 +22,7 @@ A TypeScript SDK for MEXC Futures trading with REST API and WebSocket support, p
   - [Configuration Reference](#configuration-reference)
   - [Running Locally](#running-locally)
   - [Position-Close Notifications](#-position-close-notifications)
+  - [Periodic Position Summary](#-periodic-position-summary)
 - [Creating the Telegram Bot & Adding Channels](#-creating-the-telegram-bot--adding-channels)
 - [Remote Server Deployment](#-remote-server-deployment)
   - [Option A: Manual Setup (Ubuntu/Debian)](#option-a-manual-setup-ubuntudebian)
@@ -150,6 +151,10 @@ All settings are environment variables. Copy `.env.example` and fill in:
 | **Position-Close Notifications** | | |
 | `PNL_NOTIFICATION_CHANNEL` | *(empty)* | Channel/chat ID that receives realized PNL + balance updates when a position closes. Empty disables the feature |
 | `POSITION_MONITOR_INTERVAL_SECONDS` | `30` | How often (s) to poll MEXC for closed positions (min 5) |
+| **Position Summary** | | |
+| `SUMMARY_NOTIFICATION_CHANNEL` | *(empty)* | Channel/chat ID for the periodic position summary. Empty = reuse `PNL_NOTIFICATION_CHANNEL` |
+| `SUMMARY_INTERVAL_HOURS` | `8` | How often (h) the position summary is sent |
+| `SUMMARY_WINDOW_HOURS` | `4` | Trailing window (h) for the PNL max/min stats shown in the summary |
 
 ### Running Locally
 
@@ -197,6 +202,43 @@ Entry: 67,000.00 → Exit: 69,000.00
 3. Optionally tune `POSITION_MONITOR_INTERVAL_SECONDS` (default `30`, min `5`) — how often the bot polls MEXC to detect a closed position.
 
 > 💡 The monitor detects **any** position on your account that closes — whether opened by the bot or manually. On startup it seeds its known-position list, so positions that already closed while the bot was offline won't trigger notifications.
+
+### 📊 Periodic Position Summary
+
+Every `SUMMARY_INTERVAL_HOURS` (default `8`), the bot sends a summary of the current account state to the summary channel, showing:
+
+- **Open positions** — symbol, direction, leverage, entry price, **current PNL**, and the **max / min PNL** reached over the trailing `SUMMARY_WINDOW_HOURS` (default `4` hours)
+- **Available balance** and **equity**
+
+Example message:
+
+```
+📊 POSITION SUMMARY
+⏱️ Last 4h · report every 8h
+
+📂 Open Positions (2)
+──────────────
+🟢 BTC_USDT LONG · 10x
+Entry: 67,000.00
+PNL: +176.70 USDT
+   max +210.10 / min -5.30 USDT
+──────────────
+🔴 ETH_USDT SHORT · 5x
+Entry: 3,500.00
+PNL: -12.00 USDT
+   max +40.50 / min -15.20 USDT
+
+💼 Available: 1,234.56 USDT
+📈 Equity: 5,678.90 USDT
+```
+
+**Setup:**
+
+1. Set `SUMMARY_NOTIFICATION_CHANNEL` in `.env` (numeric ID or `@username`). Leave it empty to reuse `PNL_NOTIFICATION_CHANNEL`.
+2. The bot samples unrealized PNL on the same `POSITION_MONITOR_INTERVAL_SECONDS` cadence to build the max/min stats.
+3. Tune the cadence with `SUMMARY_INTERVAL_HOURS` and the reporting window with `SUMMARY_WINDOW_HOURS`.
+
+> 💡 Max/min PNL is tracked only while the bot is running (it polls unrealized PNL continuously). If the bot restarts, the stats begin accumulating again from scratch.
 
 ---
 

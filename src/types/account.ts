@@ -57,6 +57,8 @@ export interface Position {
   createTime: number; // create timestamp
   updateTime: number; // update timestamp
   autoAddIm?: boolean; // auto add initial margin
+  unRealizedPnl?: number; // unrealized profit and loss of the position
+  profitRatio?: number; // return ratio = realized PNL / initial margin
 }
 
 export interface OpenPositionsResponse {
