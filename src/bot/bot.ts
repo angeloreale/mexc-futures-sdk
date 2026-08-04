@@ -165,18 +165,6 @@ export class SignalBot {
     process.once("SIGINT", () => { void shutdown("SIGINT"); });
     process.once("SIGTERM", () => { void shutdown("SIGTERM"); });
 
-    // Launch bot (long-polling)
-    await this.telegram.launch();
-    this.logger.info("✅ Bot is running and listening for signals");
-
-    // Start position-close PNL notifications (after Telegram is live so sends work)
-    if (this.pnlMonitor) {
-      this.pnlMonitor.start();
-      this.logger.info(
-        `📨 PNL notifications → ${this.config.pnlNotificationChannel}`
-      );
-    }
-
     // Emit an initial summary snapshot immediately on startup, before polling begins.
     try {
       await this.summaryMonitor.emitSummary();
@@ -188,7 +176,8 @@ export class SignalBot {
       );
     }
 
-    // Start periodic position summaries (always active for console/file logging)
+    // Start periodic position summaries (always active for console/file logging).
+    // Starts before Telegram launch so polling runs even if Telegram is slow to connect.
     this.summaryMonitor.start();
     const summaryDest = this.config.summaryNotificationChannel
       ? `→ ${this.config.summaryNotificationChannel} `
@@ -197,6 +186,18 @@ export class SignalBot {
       `📊 Position summary ${summaryDest}` +
         `(every ${this.config.summaryIntervalHours}h, window ${this.config.summaryWindowHours}h)`
     );
+
+    // Start position-close PNL notifications (before Telegram launch to ensure timer is set)
+    if (this.pnlMonitor) {
+      this.pnlMonitor.start();
+      this.logger.info(
+        `📨 PNL notifications → ${this.config.pnlNotificationChannel}`
+      );
+    }
+
+    // Launch bot (long-polling)
+    await this.telegram.launch();
+    this.logger.info("✅ Bot is running and listening for signals");
   }
 
   /**

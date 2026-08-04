@@ -186,10 +186,13 @@ export class PositionSummaryMonitor {
     );
     void this.sample();
     this.sampleTimer = setInterval(() => void this.sample(), this.sampleIntervalMs);
-    if (this.sampleTimer.unref) this.sampleTimer.unref();
 
     this.summaryTimer = setInterval(() => void this.emitSummary(), this.intervalMs);
-    if (this.summaryTimer.unref) this.summaryTimer.unref();
+
+    this.logger.info(
+      `⏱️ Polling timer set: sample every ${this.sampleIntervalMs / 1000}s, ` +
+        `summary every ${this.intervalMs / 3600000}h`
+    );
   }
 
   /** Stop both timers, run a final sample + summary flush, and persist stats. */
