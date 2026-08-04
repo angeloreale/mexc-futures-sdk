@@ -258,13 +258,17 @@ PNL: -12.00 USDT
 
 📌 Pending Orders (2)
 🟡 TAO_USDT LONG · STOP ≥187.54 · 0.50 · <code>…397504</code>
-🟡 ETH_USDT SHORT · SL ≥1,884.95 · 0.17 · <code>…2904</code>
+🟡 ETH_USDT SHORT · TP ≤1,856.00 / SL ≥1,884.95 · 0.17 · <code>…2904</code>
 
 💼 Available: 1,234.56 USDT
 📈 Equity: 5,678.90 USDT
 ```
 
-Pending orders are the plan orders currently open on the exchange — attached **TP/SL orders** and **stop/trigger entries** — fetched from the futures API (`/private/planorder/list/pending`). Each is shown on one line with its direction, TP/SL vs STOP label, trigger condition (`≥`/`≤`), volume and a shortened order ID. Order/position IDs are shown shortened for a compact layout — the full IDs appear in the order-placed alerts.
+Pending orders are the orders currently open on the exchange, fetched from the futures API in two calls and shown one line each:
+- **STOP entries** — from `GET /private/planorder/list/orders` (untriggered): direction, `STOP` with its trigger condition (`≥`/`≤`) and price.
+- **TP/SL pairs** — from `GET /private/stoporder/list/orders` (uncompleted): direction plus `TP … / SL …` with the correct trigger direction (a long's TP fires on a rise, SL on a fall; a short's the reverse).
+
+Order IDs are shown shortened for a compact layout — the full IDs appear in the order-placed alerts.
 
 **Setup:**
 

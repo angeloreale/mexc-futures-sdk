@@ -26,7 +26,8 @@ import {
   SubmitPlanOrderRequest,
   SubmitPlanOrderResponse,
   GetOrderResponse,
-  PendingPlanOrdersResponse,
+  PlanOrderListResponse,
+  StopOrderListResponse,
 } from "./types/orders";
 import {
   RiskLimit,
@@ -485,14 +486,44 @@ export class MexcFuturesSDK {
   }
 
   /**
-   * Get pending plan orders — attached TP/SL orders AND stop/trigger entry
-   * orders that have not yet fired.
+   * Get the plan/trigger order list (stop entries).
+   * @param symbol Optional contract symbol
+   * @param states Optional order state filter (1=untriggered, 2=cancelled, 3=executed, 4=invalid, 5=execution failed)
    */
-  async getPendingPlanOrders(): Promise<PendingPlanOrdersResponse> {
+  async getPlanOrders(
+    symbol?: string,
+    states?: number
+  ): Promise<PlanOrderListResponse> {
     try {
-      const response = await this.httpClient.get(
-        ENDPOINTS.GET_PENDING_PLAN_ORDERS
-      );
+      const params: Record<string, string | number> = { page_num: 1, page_size: 100 };
+      if (symbol) params.symbol = symbol;
+      if (states !== undefined) params.states = states;
+      const response = await this.httpClient.get(ENDPOINTS.PLAN_ORDER_LIST, {
+        params,
+      });
+      return response.data;
+    } catch (error) {
+      // Error is already logged by the interceptor with user-friendly message
+      throw error;
+    }
+  }
+
+  /**
+   * Get the Stop-Limit (TP/SL) order list.
+   * @param symbol Optional contract symbol
+   * @param isFinished Optional final-state filter: 0 = uncompleted, 1 = completed
+   */
+  async getStopOrders(
+    symbol?: string,
+    isFinished?: 0 | 1
+  ): Promise<StopOrderListResponse> {
+    try {
+      const params: Record<string, string | number> = { page_num: 1, page_size: 100 };
+      if (symbol) params.symbol = symbol;
+      if (isFinished !== undefined) params.is_finished = isFinished;
+      const response = await this.httpClient.get(ENDPOINTS.STOP_ORDER_LIST, {
+        params,
+      });
       return response.data;
     } catch (error) {
       // Error is already logged by the interceptor with user-friendly message

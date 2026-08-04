@@ -33,19 +33,6 @@ function shortId(id: string, tail = 6): string {
 }
 
 /**
- * Label a pending plan order: open-side (1/3) are STOP/trigger entries;
- * close-side (2/4) are attached TP/SL orders.
- *
- *   side 4 (close long): trigger ≥ → TP, trigger ≤ → SL
- *   side 2 (close short): trigger ≥ → SL, trigger ≤ → TP
- */
-function planOrderKind(side: 1 | 2 | 3 | 4, triggerType: 1 | 2): string {
-  if (side === 1 || side === 3) return "STOP";
-  if (side === 4) return triggerType === 1 ? "TP" : "SL";
-  return triggerType === 1 ? "SL" : "TP";
-}
-
-/**
  * Build the Telegram message for the periodic position summary.
  * Includes open positions (with current / max / min PNL over the window,
  * plus their position IDs), pending plan orders (one line each with their
@@ -84,11 +71,26 @@ export function formatPositionSummaryMessage(summary: PositionSummary): string {
   } else {
     for (const o of summary.pendingOrders) {
       const dir = o.side === 1 || o.side === 4 ? "LONG" : "SHORT";
-      const kind = planOrderKind(o.side, o.triggerType);
-      const arrow = o.triggerType === 1 ? "≥" : "≤";
-      lines.push(
-        `🟡 ${o.symbol} ${dir} · ${kind} ${arrow}${fmt(o.triggerPrice)} · ${fmt(o.vol)} · <code>${shortId(o.orderId)}</code>`
-      );
+      const id = `<code>${shortId(o.orderId)}</code>`;
+      if (o.kind === "STOP") {
+        const arrow = o.triggerType === 1 ? "≥" : "≤";
+        lines.push(
+          `🟡 ${o.symbol} ${dir} · STOP ${arrow}${fmt(o.triggerPrice)} · ${fmt(o.vol)} · ${id}`
+        );
+      } else {
+        // TP/SL pair. For a long: TP fires on a rise (≥), SL on a fall (≤).
+        // For a short: TP fires on a fall (≤), SL on a rise (≥).
+        const long = o.positionType === 1;
+        const tp = Number.isFinite(o.takeProfitPrice)
+          ? `TP ${long ? "≥" : "≤"}${fmt(o.takeProfitPrice)}`
+          : "";
+        const sl = Number.isFinite(o.stopLossPrice)
+          ? `SL ${long ? "≤" : "≥"}${fmt(o.stopLossPrice)}`
+          : "";
+        lines.push(
+          `🟡 ${o.symbol} ${dir} · ${[tp, sl].filter(Boolean).join(" / ")} · ${fmt(o.vol)} · ${id}`
+        );
+      }
     }
   }
   lines.push(``);

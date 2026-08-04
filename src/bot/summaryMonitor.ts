@@ -43,22 +43,30 @@ export interface OpenPositionSummary {
   margin: number;
 }
 
-/** A pending plan order (TP/SL or stop/trigger entry), one line in the summary. */
+/** A pending order shown as a single line in the summary. */
 export interface PendingOrderSummary {
-  /** MEXC plan order ID */
+  /** MEXC order ID */
   orderId: string;
   symbol: string;
   /** 1=open long, 2=close short (TP/SL), 3=open short, 4=close long (TP/SL) */
   side: 1 | 2 | 3 | 4;
-  /** 1 = fires when price >= triggerPrice, 2 = fires when price <= triggerPrice */
+  /** "STOP" = trigger entry, "TP_SL" = attached take-profit/stop-loss pair. */
+  kind: "STOP" | "TP_SL";
+  /** 1 = fires when price >= triggerPrice, 2 = fires when price <= triggerPrice (STOP). */
   triggerType: 1 | 2;
-  /** Trigger price */
+  /** Trigger price (STOP). */
   triggerPrice: number;
-  /** Volume (contracts) */
+  /** Take-profit price (TP_SL). */
+  takeProfitPrice: number;
+  /** Stop-loss price (TP_SL). */
+  stopLossPrice: number;
+  /** Position direction for TP_SL: 1 = long, 2 = short. */
+  positionType: 1 | 2;
+  /** Volume (contracts). */
   vol: number;
-  /** Leverage */
+  /** Leverage (STOP entries). */
   leverage: number;
-  /** Open type: 1 = isolated, 2 = cross */
+  /** Open type: 1 = isolated, 2 = cross. */
   openType: 1 | 2;
 }
 
@@ -332,15 +340,34 @@ export class PositionSummaryMonitor {
         };
       });
 
-      // Pending plan orders — attached TP/SL orders and stop/trigger entries.
-      // Fetched from the futures API; failure degrades gracefully (empty list).
+      // Pending orders: untriggered STOP entries (planorder/list/orders) plus
+      // uncompleted TP/SL pairs (stoporder/list/orders). Each call fails
+      // independently and degrades gracefully (that section is just omitted).
       let pendingOrders: PendingOrderSummary[] = [];
       try {
-        const ores = await this.client.getPendingPlanOrders();
-        pendingOrders = this.extractPendingOrders(ores);
+        const results = await Promise.allSettled([
+          this.client.getPlanOrders(undefined, 1), // 1 = untriggered
+          this.client.getStopOrders(undefined, 0), // 0 = uncompleted
+        ]);
+        if (results[0].status === "fulfilled") {
+          pendingOrders.push(...this.extractPlanOrders(results[0].value));
+        } else {
+          this.logger.debug(
+            "⚠️ Could not fetch trigger orders for summary:",
+            results[0].reason instanceof Error ? results[0].reason.message : results[0].reason
+          );
+        }
+        if (results[1].status === "fulfilled") {
+          pendingOrders.push(...this.extractStopOrders(results[1].value));
+        } else {
+          this.logger.debug(
+            "⚠️ Could not fetch TP/SL orders for summary:",
+            results[1].reason instanceof Error ? results[1].reason.message : results[1].reason
+          );
+        }
       } catch (error) {
         this.logger.debug(
-          "⚠️ Could not fetch pending plan orders for summary:",
+          "⚠️ Could not fetch pending orders for summary:",
           error instanceof Error ? error.message : error
         );
       }
@@ -486,28 +513,22 @@ export class PositionSummaryMonitor {
   // ── Alert helpers ─────────────────────────────────────────────────
 
   /**
-   * Parse the pending plan-orders response into a list of `PendingOrderSummary`.
-   * Tolerates several response envelopes (`data` as array, or under
-   * `planOrders` / `list` / `orders`) and keeps every side — both open-side
-   * stop/trigger entries (1/3) and close-side TP/SL orders (2/4).
+   * Parse the trigger (plan) order list (`planorder/list/orders`) into pending
+   * STOP entries. Keeps only open-side entry orders (side 1/3) that are still
+   * untriggered. Tolerates several response envelopes (array / `orders` /
+   * `resultList` / `list`).
    */
-  private extractPendingOrders(res: any): PendingOrderSummary[] {
-    const raw = res?.data;
-    let list: any[] = [];
-    if (Array.isArray(raw)) list = raw;
-    else if (Array.isArray(raw?.planOrders)) list = raw.planOrders;
-    else if (Array.isArray(raw?.orders)) list = raw.orders;
-    else if (Array.isArray(raw?.list)) list = raw.list;
-
+  private extractPlanOrders(res: any): PendingOrderSummary[] {
+    const list = this.asList(res?.data);
     const out: PendingOrderSummary[] = [];
     for (const o of list) {
       if (!o || typeof o !== "object") continue;
       const side = Number(o.side);
-      if (side < 1 || side > 4) continue;
+      if (side !== 1 && side !== 3) continue; // open-side entry STOPs only
 
-      const orderId = String(o.planOrderId ?? o.orderId ?? o.id ?? "");
+      const orderId = String(o.id ?? o.orderId ?? "");
       const symbol = String(o.symbol ?? "");
-      const triggerPrice = toFiniteNumber(o.triggerPrice ?? o.stopPrice);
+      const triggerPrice = toFiniteNumber(o.triggerPrice);
       const triggerType = Number(o.triggerType) === 2 ? 2 : 1;
       const vol = toFiniteNumber(o.vol);
       if (!orderId || !symbol || !Number.isFinite(triggerPrice) || !Number.isFinite(vol) || vol <= 0) {
@@ -517,15 +538,66 @@ export class PositionSummaryMonitor {
       out.push({
         orderId,
         symbol,
-        side: side as 1 | 2 | 3 | 4,
+        side: side as 1 | 3,
+        kind: "STOP",
         triggerType,
         triggerPrice,
+        takeProfitPrice: NaN,
+        stopLossPrice: NaN,
+        positionType: side === 1 ? 1 : 2,
         vol,
         leverage: toFiniteNumber(o.leverage) || 0,
         openType: Number(o.openType) === 2 ? 2 : 1,
       });
     }
     return out;
+  }
+
+  /**
+   * Parse the Stop-Limit order list (`stoporder/list/orders`) into pending
+   * TP/SL pairs. Each row carries BOTH the take-profit and stop-loss price for
+   * a position. Tolerates several response envelopes.
+   */
+  private extractStopOrders(res: any): PendingOrderSummary[] {
+    const list = this.asList(res?.data);
+    const out: PendingOrderSummary[] = [];
+    for (const o of list) {
+      if (!o || typeof o !== "object") continue;
+
+      const orderId = String(o.id ?? o.orderId ?? "");
+      const symbol = String(o.symbol ?? "");
+      const stopLossPrice = toFiniteNumber(o.stopLossPrice);
+      const takeProfitPrice = toFiniteNumber(o.takeProfitPrice);
+      const vol = toFiniteNumber(o.vol);
+      const positionType = Number(o.positionType) === 2 ? 2 : 1;
+      if (!orderId || !symbol || vol <= 0) continue;
+      if (!Number.isFinite(stopLossPrice) && !Number.isFinite(takeProfitPrice)) continue;
+
+      out.push({
+        orderId,
+        symbol,
+        side: positionType === 1 ? 4 : 2, // close long / close short
+        kind: "TP_SL",
+        triggerType: 1,
+        triggerPrice: NaN,
+        takeProfitPrice,
+        stopLossPrice,
+        positionType,
+        vol,
+        leverage: 0, // TP/SL records do not carry leverage
+        openType: Number(o.openType) === 2 ? 2 : 1,
+      });
+    }
+    return out;
+  }
+
+  /** Normalize a `data` payload into an array regardless of envelope shape. */
+  private asList(raw: any): any[] {
+    if (Array.isArray(raw)) return raw;
+    if (Array.isArray(raw?.orders)) return raw.orders;
+    if (Array.isArray(raw?.resultList)) return raw.resultList;
+    if (Array.isArray(raw?.list)) return raw.list;
+    return [];
   }
 
   /**

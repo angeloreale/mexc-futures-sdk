@@ -118,37 +118,71 @@ export interface SubmitOrderResponse {
   data?: string | number; // Order ID — large ids exceed 2^53 and are returned as exact strings; use String(data)
 }
 
-// ── Pending Plan Orders (TP/SL + trigger entries) ───────────────────
-// MEXC endpoint: GET /api/v1/private/planorder/list/pending
-// Returns pending plan orders: attached TP/SL orders (close-side) AND
-// stop/trigger entry orders (open-side) that have not yet fired.
+// ── Trigger (Plan) Order List ──────────────────────────────────────
+// MEXC endpoint: GET /api/v1/private/planorder/list/orders
+// Returns plan/trigger orders (stop entries). Filter with `states`:
+// 1 = untriggered, 2 = cancelled, 3 = executed, 4 = invalid, 5 = execution failed.
 
-export interface PendingPlanOrder {
-  /** Plan order ID — large ids exceed 2^53, use String(). */
-  planOrderId: string | number;
+export interface PlanOrder {
+  /** Trigger order ID — large ids exceed 2^53, use String(). */
+  id: string | number;
   symbol: string;
   /** 1=open long, 2=close short, 3=open short, 4=close long */
   side: number;
-  /** 1=fires when price >= triggerPrice, 2=fires when price <= triggerPrice */
+  /** 1=more than or equal, 2=less than or equal */
   triggerType: number;
   /** Price that triggers the order */
   triggerPrice: number | string;
-  /** Execution order type after trigger (5 = market) */
-  orderType?: number;
+  /** Execute price */
+  price?: number | string;
   vol: number | string;
-  leverage?: number;
   openType?: 1 | 2;
-  stopLossPrice?: number | string;
-  takeProfitPrice?: number | string;
+  leverage?: number;
+  /** 1 = untriggered, 2 = cancelled, 3 = executed, 4 = invalid, 5 = execution failed */
+  state?: number;
   executeCycle?: number;
+  trend?: number;
+  orderType?: number;
+  /** Order ID on successful execution (0 while untriggered) */
+  orderId?: string | number;
   createTime?: number;
+  updateTime?: number;
 }
 
-/**
- * The response envelope may vary (array, `{ planOrders }`, `{ list }`), so
- * `data` is typed loosely and parsed defensively by the consumer.
- */
-export interface PendingPlanOrdersResponse {
+export interface PlanOrderListResponse {
+  success: boolean;
+  code: number;
+  message?: string;
+  data: any;
+}
+
+// ── Stop-Limit (TP/SL) Order List ──────────────────────────────────
+// MEXC endpoint: GET /api/v1/private/stoporder/list/orders
+// Returns attached TP/SL orders. Filter with `is_finished`: 0 = uncompleted,
+// 1 = completed. Each row carries BOTH the take-profit and stop-loss price
+// for a position.
+
+export interface StopOrder {
+  /** Stop-Limit order ID — large ids exceed 2^53, use String(). */
+  id: string | number;
+  /** Limit order ID (0 when based on a position) */
+  orderId?: string | number;
+  symbol: string;
+  positionId?: number;
+  stopLossPrice?: number | string;
+  takeProfitPrice?: number | string;
+  /** 0=untriggered, 1=TP triggered, 2=SL triggered */
+  triggerSide?: number;
+  /** 1=long, 2=short */
+  positionType: number;
+  vol?: number | string;
+  realityVol?: number | string;
+  isFinished?: number;
+  createTime?: number;
+  updateTime?: number;
+}
+
+export interface StopOrderListResponse {
   success: boolean;
   code: number;
   message?: string;
