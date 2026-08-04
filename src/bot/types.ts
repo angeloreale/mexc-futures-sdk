@@ -78,6 +78,16 @@ export interface TradeRecord {
   success: boolean;
   error?: string;
   executedAt: number;
+  /**
+   * Volume actually submitted for THIS order. Differs from resolved.volume
+   * when a signal with multiple TPs is split into one order per TP.
+   */
+  orderVolume?: number;
+  /**
+   * Take-profit price attached to THIS order. Differs from resolved when a
+   * signal with multiple TPs is split into one order per TP.
+   */
+  orderTp?: number;
 }
 
 /**

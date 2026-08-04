@@ -47,6 +47,8 @@ export class TradeExecutor {
         orderId: "DRY_RUN",
         success: true,
         executedAt: Date.now(),
+        orderVolume: trade.volume,
+        orderTp: trade.takeProfitPrice,
       };
       this.logTradeRecord(record);
       return [record];
@@ -60,6 +62,8 @@ export class TradeExecutor {
         success: false,
         error: "Trading disabled",
         executedAt: Date.now(),
+        orderVolume: trade.volume,
+        orderTp: trade.takeProfitPrice,
       };
       this.logTradeRecord(record);
       return [record];
@@ -294,6 +298,8 @@ export class TradeExecutor {
         orderId,
         success: true,
         executedAt: Date.now(),
+        orderVolume: volume,
+        orderTp: takeProfitPrice,
       };
     }
     const errorMsg = response.message || `Code ${response.code}`;
@@ -304,6 +310,8 @@ export class TradeExecutor {
       success: false,
       error: errorMsg,
       executedAt: Date.now(),
+      orderVolume: volume,
+      orderTp: takeProfitPrice,
     };
   }
 
@@ -322,6 +330,8 @@ export class TradeExecutor {
       success: false,
       error: errorMsg,
       executedAt: Date.now(),
+      orderVolume: volume,
+      orderTp: takeProfitPrice,
     };
   }
 
