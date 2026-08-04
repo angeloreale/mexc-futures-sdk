@@ -14,6 +14,11 @@ import {
   ClosedPositionInfo,
 } from "./pnlMonitor";
 import { formatPositionClosedMessage } from "./pnlMessage";
+import {
+  PositionSummaryMonitor,
+  PositionSummary,
+} from "./summaryMonitor";
+import { formatPositionSummaryMessage } from "./summaryMessage";
 
 /**
  * Main Telegram Signal Bot.
@@ -30,6 +35,8 @@ export class SignalBot {
   private state: BotState;
   /** Polls MEXC for closed positions and sends PNL notifications (null when disabled). */
   private pnlMonitor: PositionClosureMonitor | null = null;
+  /** Periodically samples open positions and sends a summary (null when disabled). */
+  private summaryMonitor: PositionSummaryMonitor | null = null;
   /** Cache account equity for 10s to avoid rate limits on rapid signals. */
   private equityCache: { equity: number; ts: number } | null = null;
   private readonly EQUITY_CACHE_TTL_MS = 10_000;
@@ -64,6 +71,19 @@ export class SignalBot {
         intervalSeconds: config.positionMonitorIntervalSeconds,
         onClose: (info, account) =>
           this.sendPositionClosedNotification(info, account),
+      });
+    }
+
+    // Periodic position summaries (only when a channel is configured)
+    if (config.summaryNotificationChannel) {
+      this.summaryMonitor = new PositionSummaryMonitor({
+        client: this.mexcClient,
+        logger: this.logger,
+        baseCurrency: config.baseCurrency,
+        sampleIntervalSeconds: config.positionMonitorIntervalSeconds,
+        windowHours: config.summaryWindowHours,
+        intervalHours: config.summaryIntervalHours,
+        onSummary: (summary) => this.sendPositionSummary(summary),
       });
     }
 
@@ -117,6 +137,7 @@ export class SignalBot {
     const shutdown = async (signal: string) => {
       this.logger.info(`\n🛑 Received ${signal} — shutting down...`);
       this.pnlMonitor?.stop();
+      this.summaryMonitor?.stop();
       this.telegram.stop(signal);
       await this.logger.close();
       process.exit(0);
@@ -133,6 +154,15 @@ export class SignalBot {
       this.pnlMonitor.start();
       this.logger.info(
         `📨 PNL notifications → ${this.config.pnlNotificationChannel}`
+      );
+    }
+
+    // Start periodic position summaries
+    if (this.summaryMonitor) {
+      this.summaryMonitor.start();
+      this.logger.info(
+        `📊 Position summary → ${this.config.summaryNotificationChannel} ` +
+          `(every ${this.config.summaryIntervalHours}h, window ${this.config.summaryWindowHours}h)`
       );
     }
   }
@@ -157,6 +187,28 @@ export class SignalBot {
     } catch (error) {
       this.logger.error(
         "❌ Failed to send PNL notification:",
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+
+  /**
+   * Send the periodic position summary to the configured channel.
+   */
+  private async sendPositionSummary(summary: PositionSummary): Promise<void> {
+    const text = formatPositionSummaryMessage(summary);
+    try {
+      await this.telegram.telegram.sendMessage(
+        this.config.summaryNotificationChannel,
+        text,
+        { parse_mode: "HTML" }
+      );
+      this.logger.info(
+        `📊 Position summary sent to ${this.config.summaryNotificationChannel}`
+      );
+    } catch (error) {
+      this.logger.error(
+        "❌ Failed to send position summary:",
         error instanceof Error ? error.message : error
       );
     }
