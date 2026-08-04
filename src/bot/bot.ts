@@ -222,6 +222,49 @@ export class SignalBot {
   }
 
   /**
+   * True when the message is the on-demand summary command
+   * "CHECK POSITIONS" (case-insensitive, whitespace-tolerant).
+   */
+  private isCheckPositionsCommand(text: string): boolean {
+    return text.trim().toUpperCase() === "CHECK POSITIONS";
+  }
+
+  /**
+   * Emit a position summary immediately when "CHECK POSITIONS" is sent to the
+   * summary channel. The message is marked processed for idempotency, so a
+   * restart or Telegram re-delivery won't re-trigger the same message.
+   */
+  private async handleCheckPositions(
+    chatId: string,
+    messageId: number
+  ): Promise<void> {
+    if (chatId !== this.config.summaryNotificationChannel) {
+      this.logger.debug(
+        `ℹ️ CHECK POSITIONS ignored — only works in the summary channel (${this.config.summaryNotificationChannel})`
+      );
+      return;
+    }
+    if (!this.summaryMonitor) {
+      this.logger.warn(
+        "⚠️ CHECK POSITIONS received but the summary monitor is not enabled"
+      );
+      return;
+    }
+    if (this.state.isProcessed(chatId, messageId)) {
+      this.logger.debug(
+        `⏭️ CHECK POSITIONS ${chatId}#${messageId} already processed`
+      );
+      return;
+    }
+
+    this.state.markProcessed(chatId, messageId);
+    this.logger.info(
+      "📊 CHECK POSITIONS received — emitting summary immediately"
+    );
+    await this.summaryMonitor.emitSummary();
+  }
+
+  /**
    * Send an order-placed notification to the summary channel.
    */
   private async sendOrderPlacedNotification(record: TradeRecord): Promise<void> {
@@ -260,6 +303,15 @@ export class SignalBot {
     const chatId = String(msg.chat.id);
     const messageId = msg.message_id;
     const text: string = msg.text;
+
+    // On-demand summary: "CHECK POSITIONS" sent to the summary channel emits
+    // the position summary immediately instead of waiting for the next
+    // cadence. Handled before the allowed-channel gate so it also works when
+    // the summary channel isn't listed in ALLOWED_CHANNELS.
+    if (this.isCheckPositionsCommand(text)) {
+      await this.handleCheckPositions(chatId, messageId);
+      return;
+    }
 
     // Check if from allowed channel
     const chatUsername = msg.chat?.username;

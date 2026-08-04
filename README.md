@@ -265,6 +265,16 @@ PNL: -12.00 USDT
 
 > 💡 Max/min PNL is tracked only while the bot is running (it polls unrealized PNL continuously). If the bot restarts, the stats begin accumulating again from scratch.
 
+**On-demand summary:**
+
+Send `CHECK POSITIONS` to the summary channel and the bot will emit the position summary **immediately**, without waiting for the next `SUMMARY_INTERVAL_HOURS` tick. The command is case-insensitive, works regardless of whether the summary channel is listed in `ALLOWED_CHANNELS`, and each message is only honored once (idempotent across restarts).
+
+```
+CHECK POSITIONS
+```
+
+> 💡 The on-demand summary reflects the same data as the periodic one, including the current / max / min PNL tracked over the trailing window. If the summary feature is disabled (no `SUMMARY_NOTIFICATION_CHANNEL`), the command is ignored.
+
 ### 🚀 Order Placement Alerts
 
 The bot also sends a short alert to the **same summary channel** whenever an order is successfully placed/executed (market fills immediately, trigger entries are placed as pending). It shows the symbol, direction, leverage, entry, SL/TP, volume, notional, risk and the order ID:
