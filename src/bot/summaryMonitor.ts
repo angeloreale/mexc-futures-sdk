@@ -264,6 +264,12 @@ export class PositionSummaryMonitor {
       // Persist the tracked stats (throttled) so a restart doesn't lose them.
       this.persistStats();
 
+      if (this.logger.isDebugEnabled()) {
+        this.logger.debug(
+          `📊 Polled ${active.length} open position(s) · tracking ${this.stats.size} PNL stat(s)`
+        );
+      }
+
       // Evaluate >50%-toward-SL/TP alerts for positions with known targets.
       this.slTpStore.pruneStale(this.slTpRetentionMs);
       this.checkAlerts(active);
