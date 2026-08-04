@@ -1,7 +1,10 @@
 import { TokenBucket } from "../../utils/rateLimiter";
 
-/** Flush pending microtasks (Promise.then callbacks) after advancing fake timers. */
-const flush = () => new Promise<void>((r) => setImmediate(r));
+/**
+ * Yield to the microtask queue so Promise callbacks queued by a just-resolved
+ * waiter run. (Can't use setImmediate here — jest's fake timers mock it.)
+ */
+const flush = () => Promise.resolve();
 
 describe("TokenBucket", () => {
   beforeEach(() => {
