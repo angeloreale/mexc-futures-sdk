@@ -181,15 +181,21 @@ without exhausting the API. If you still see `513` errors, lower `ORDER_RATE_CAP
 to `1`–`2`; if you want more burst headroom, raise it. Throttling events are logged as
 `⏳ MEXC rate-limit: throttled ... (waited Xms)`.
 
-### Running Locally
+### Running the Bot
+
+The bot runs as a single Node.js process — no daemon or container is required.
+All file paths in `.env` are resolved against the working directory.
 
 ```bash
-# Development mode (with ts-node, hot-reload not included)
-npm run bot
-
-# Production mode (pre-built)
+# Build once (or after any source change)
 npm run build
-npm run bot:start
+
+# Run (foreground — Ctrl+C to stop)
+node dist/bot/index.js
+
+# Run in background
+nohup node dist/bot/index.js > bot.log 2>&1 &
+# Check logs: tail -f bot.log
 ```
 
 **First run checklist:**
@@ -277,6 +283,13 @@ Order IDs are shown shortened for a compact layout — the full IDs appear in th
 3. Tune the cadence with `SUMMARY_INTERVAL_HOURS` and the reporting window with `SUMMARY_WINDOW_HOURS`.
 
 > 💡 Max/min PNL is tracked only while the bot is running (it polls unrealized PNL continuously). If the bot restarts, the stats begin accumulating again from scratch.
+
+**Verifying polling & persistence:**
+
+- The bot logs `📊 Polling active: N open position(s)` at INFO on the first successful poll.
+- Poll stats are written to `<STATE_FILE_PATH>-summary-stats.json` (e.g. `./bot-summary-stats.json`) — check its `stats` array and `updatedAt` timestamp.
+- Set `LOG_LEVEL=DEBUG` to see per-poll lines (`📊 Polled N open position(s) …`) and per-source pending-order status (`📦 Pending order sources → …`).
+- All HTTP requests and responses (including pending-order endpoint attempts) are logged to `{LOG_DIR}/http-YYYY-MM-DD.log` — check this file for raw MEXC API responses if pending orders show 0.
 
 **On-demand summary:**
 
@@ -446,98 +459,31 @@ If you see `📝 Not a trade signal — ignoring`, the message format isn't matc
 
 ---
 
-## 🖥 Remote Server Deployment
+## 🖥 Server Deployment
 
-### Prerequisites (Any Method)
-
-- A Linux server (Ubuntu 22.04+ recommended) with:
-  - Node.js 18+ installed
-  - Git installed
-  - At least 512 MB RAM (1 GB recommended)
-  - Stable internet connection
-
-### Option A: Manual Setup (Ubuntu/Debian)
+The bot runs as a single Node.js process. Deploy the project directory anywhere,
+`cd` into it, and run `node dist/bot/index.js`.
 
 ```bash
-# 1. Update system & install Node.js 20.x
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt update && sudo apt install -y nodejs git
-
-# 2. Create bot user (security best practice)
-sudo useradd -r -s /bin/false mexcbot
-
-# 3. Clone & set up the project
-sudo mkdir -p /opt/mexc-signal-bot
-sudo chown -R $USER:$USER /opt/mexc-signal-bot
+# 1. Clone & set up the project
 cd /opt/mexc-signal-bot
 git clone https://github.com/oboshto/mexc-futures-sdk.git .
+npm install && npm run build
 
-# 4. Install dependencies & build
-npm install
-npm run build
+# 2. Create and edit .env (see Configuration Reference above)
+#    Keep paths relative — they resolve against the working directory:
+#    STATE_FILE_PATH=./bot-state.json
+#    LOG_DIR=./logs
 
-# 5. Create .env file
-cat > .env << 'EOF'
-MEXC_KEY=mx0your_api_key_here
-MEXC_SECRET_KEY=your_secret_key_here
-TELEGRAM_BOT_TOKEN=1234567890:your_bot_token
-ALLOWED_CHANNELS=-1001234567890,-1009876543210
-DEFAULT_LEVERAGE=10
-OPEN_TYPE=1
-RISK_PERCENT=0.01
-DEFAULT_TP_RATIO=1.5
-MAX_CONCURRENT_TRADES=5
-MAX_NOTIONAL_PER_TRADE=5000
-DRY_RUN=true
-TRADING_ENABLED=false
-LOG_LEVEL=INFO
-BASE_CURRENCY=USDT
-STATE_FILE_PATH=/opt/mexc-signal-bot/bot-state.json
-EOF
+# 3. Run
+node dist/bot/index.js
 
-# 6. Test it
-DRY_RUN=true node dist/bot/index.js
-# Ctrl+C after confirming it starts successfully
-
-# 7. Run in background (temporary test)
+# To keep running after logout:
 nohup node dist/bot/index.js > bot.log 2>&1 &
-# Check logs: tail -f bot.log
+tail -f bot.log
 ```
 
-### Option B: systemd Service
-
-The repo includes a ready-to-use systemd service file at `deploy/mexc-signal-bot.service`:
-
-```bash
-# 1. Complete manual setup above first, then:
-
-# 2. Fix ownership
-sudo chown -R mexcbot:mexcbot /opt/mexc-signal-bot
-
-# 3. Install the systemd service
-sudo cp deploy/mexc-signal-bot.service /etc/systemd/system/
-sudo systemctl daemon-reload
-
-# 4. Start and enable (auto-start on boot)
-sudo systemctl enable --now mexc-signal-bot
-
-# 5. Check status
-sudo systemctl status mexc-signal-bot
-
-# 6. View logs
-sudo journalctl -u mexc-signal-bot -f
-
-# 7. Common management commands
-sudo systemctl stop mexc-signal-bot       # Stop the bot
-sudo systemctl restart mexc-signal-bot    # Restart after .env changes
-sudo systemctl disable mexc-signal-bot    # Disable auto-start
-```
-
-The service file uses:
-- Systemd journal for logging (view with `journalctl`)
-- Environment file at `/opt/mexc-signal-bot/.env`
-- Automatic restart on crash (10s delay)
-- Security hardening (no new privileges, read-only filesystem except bot directory)
+**systemd (optional):** A ready-to-use service file lives at `deploy/mexc-signal-bot.service`.
 
 ### Option C: Docker
 

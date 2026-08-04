@@ -26,6 +26,7 @@ import {
   SubmitPlanOrderRequest,
   SubmitPlanOrderResponse,
   GetOrderResponse,
+  OpenOrdersResponse,
   PlanOrderListResponse,
   StopOrderListResponse,
 } from "./types/orders";
@@ -481,6 +482,20 @@ export class MexcFuturesSDK {
       this.logger.debug("🔍 Plan order response:", response.data);
       return response.data;
     } catch (error) {
+      throw error;
+    }
+  }
+
+  /**
+   * Get the user's current pending (open) orders — limit, trigger and TP/SL
+   * combined into one flat list.
+   */
+  async getOpenOrders(): Promise<OpenOrdersResponse> {
+    try {
+      const response = await this.httpClient.get(ENDPOINTS.OPEN_ORDERS);
+      return response.data;
+    } catch (error) {
+      // Error is already logged by the interceptor with user-friendly message
       throw error;
     }
   }

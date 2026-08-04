@@ -9,6 +9,7 @@ export const ENDPOINTS = {
   CANCEL_ORDER_BY_EXTERNAL_ID: "/private/order/cancel_with_external",
   CANCEL_ALL_ORDERS: "/private/order/cancel_all",
   ORDER_HISTORY: "/private/order/list/history_orders",
+  OPEN_ORDERS: "/private/order/list/open_orders", // GET current pending orders (all tabs)
   PLAN_ORDER_LIST: "/private/planorder/list/orders", // GET trigger/plan order list
   STOP_ORDER_LIST: "/private/stoporder/list/orders", // GET Stop-Limit (TP/SL) order list
   ORDER_DEALS: "/private/order/list/order_deals",

@@ -156,6 +156,42 @@ export interface PlanOrderListResponse {
   data: any;
 }
 
+// ── Current Pending (Open) Orders ──────────────────────────────────
+// MEXC endpoint: GET /api/v1/private/order/list/open_orders
+// Returns the user's current pending orders — limit, trigger and TP/SL —
+// as one flat list (symbol optional: omitted returns all).
+
+export interface OpenOrder {
+  /** Order ID — large ids exceed 2^53, use String(). */
+  orderId: string | number;
+  symbol: string;
+  positionId?: number;
+  /** Trigger/limit price */
+  price: number | string;
+  vol: number | string;
+  leverage?: number;
+  /** 1=open long, 2=close short, 3=open short, 4=close long */
+  side: number;
+  /** 1=limit, 2=system take-over delegate, 3=close delegate (TP/SL), 4=ADL */
+  category?: number;
+  orderType?: number;
+  dealVol?: number | string;
+  openType?: number;
+  state?: number;
+  externalOid?: string;
+  stopLossPrice?: number | string;
+  takeProfitPrice?: number | string;
+  createTime?: number;
+  updateTime?: number;
+}
+
+export interface OpenOrdersResponse {
+  success: boolean;
+  code: number;
+  message?: string;
+  data: any;
+}
+
 // ── Stop-Limit (TP/SL) Order List ──────────────────────────────────
 // MEXC endpoint: GET /api/v1/private/stoporder/list/orders
 // Returns attached TP/SL orders. Filter with `is_finished`: 0 = uncompleted,
