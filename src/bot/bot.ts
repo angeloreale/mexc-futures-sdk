@@ -42,8 +42,8 @@ export class SignalBot {
   private state: BotState;
   /** Polls MEXC for closed positions and sends PNL notifications (null when disabled). */
   private pnlMonitor: PositionClosureMonitor | null = null;
-  /** Periodically samples open positions and sends a summary (null when disabled). */
-  private summaryMonitor: PositionSummaryMonitor | null = null;
+  /** Periodically samples open positions and sends a summary. */
+  private summaryMonitor!: PositionSummaryMonitor;
   /** SL/TP levels per symbol, populated on order execution, consumed by the monitor for alerts. */
   private slTpStore = new SlTpStore();
   /** Cache account equity for 10s to avoid rate limits on rapid signals. */
@@ -91,21 +91,20 @@ export class SignalBot {
       });
     }
 
-    // Periodic position summaries (only when a channel is configured)
-    if (config.summaryNotificationChannel) {
-      this.summaryMonitor = new PositionSummaryMonitor({
-        client: this.mexcClient,
-        logger: this.logger,
-        baseCurrency: config.baseCurrency,
-        sampleIntervalSeconds: config.positionMonitorIntervalSeconds,
-        windowHours: config.summaryWindowHours,
-        intervalHours: config.summaryIntervalHours,
-        onSummary: (summary) => this.sendPositionSummary(summary),
-        slTpStore: this.slTpStore,
-        onAlert: (alert) => this.sendPositionAlert(alert),
-        slTpRetentionDays: config.logRetentionDays,
-      });
-    }
+    // Periodic position summaries — always enabled for local console/file
+    // logging; Telegram notifications are sent only when a channel is configured.
+    this.summaryMonitor = new PositionSummaryMonitor({
+      client: this.mexcClient,
+      logger: this.logger,
+      baseCurrency: config.baseCurrency,
+      sampleIntervalSeconds: config.positionMonitorIntervalSeconds,
+      windowHours: config.summaryWindowHours,
+      intervalHours: config.summaryIntervalHours,
+      onSummary: (summary) => this.sendPositionSummary(summary),
+      slTpStore: this.slTpStore,
+      onAlert: (alert) => this.sendPositionAlert(alert),
+      slTpRetentionDays: config.logRetentionDays,
+    });
 
     // Initialize Telegram bot
     this.telegram = new Telegraf(config.telegramBotToken);
@@ -157,9 +156,7 @@ export class SignalBot {
     const shutdown = async (signal: string) => {
       this.logger.info(`\n🛑 Received ${signal} — shutting down...`);
       this.pnlMonitor?.stop();
-      if (this.summaryMonitor) {
-        await this.summaryMonitor.stop();
-      }
+      await this.summaryMonitor.stop();
       this.telegram.stop(signal);
       this.logger.info("🛑 Shutdown complete — flushing logs...");
       await this.logger.close();
@@ -180,24 +177,25 @@ export class SignalBot {
       );
     }
 
-    // Start periodic position summaries
-    if (this.summaryMonitor) {
-      this.summaryMonitor.start();
-      this.logger.info(
-        `📊 Position summary → ${this.config.summaryNotificationChannel} ` +
-          `(every ${this.config.summaryIntervalHours}h, window ${this.config.summaryWindowHours}h)`
-      );
+    // Start periodic position summaries (always active for console/file logging)
+    this.summaryMonitor.start();
+    const summaryDest = this.config.summaryNotificationChannel
+      ? `→ ${this.config.summaryNotificationChannel} `
+      : "(local only) ";
+    this.logger.info(
+      `📊 Position summary ${summaryDest}` +
+        `(every ${this.config.summaryIntervalHours}h, window ${this.config.summaryWindowHours}h)`
+    );
 
-      // Emit an initial summary snapshot to both console and Telegram.
-      try {
-        await this.summaryMonitor.emitSummary();
-        this.logger.info("📊 Initial summary snapshot emitted");
-      } catch (error) {
-        this.logger.error(
-          "❌ Failed to emit initial summary:",
-          error instanceof Error ? error.message : error
-        );
-      }
+    // Emit an initial summary snapshot to console (and Telegram if configured).
+    try {
+      await this.summaryMonitor.emitSummary();
+      this.logger.info("📊 Initial summary snapshot emitted");
+    } catch (error) {
+      this.logger.error(
+        "❌ Failed to emit initial summary:",
+        error instanceof Error ? error.message : error
+      );
     }
   }
 
@@ -228,18 +226,17 @@ export class SignalBot {
 
   /**
    * Send the periodic position summary to the configured channel.
+   * Skips Telegram delivery when no summary channel is configured.
    */
   private async sendPositionSummary(summary: PositionSummary): Promise<void> {
+    const channel = this.config.summaryNotificationChannel;
+    if (!channel) return;
     const text = formatPositionSummaryMessage(summary);
     try {
-      await this.telegram.telegram.sendMessage(
-        this.config.summaryNotificationChannel,
-        text,
-        { parse_mode: "HTML" }
-      );
-      this.logger.info(
-        `📊 Position summary sent to ${this.config.summaryNotificationChannel}`
-      );
+      await this.telegram.telegram.sendMessage(channel, text, {
+        parse_mode: "HTML",
+      });
+      this.logger.info(`📊 Position summary sent to ${channel}`);
     } catch (error) {
       this.logger.error(
         "❌ Failed to send position summary:",
@@ -334,12 +331,6 @@ export class SignalBot {
     if (chatId !== this.config.summaryNotificationChannel) {
       this.logger.debug(
         `ℹ️ CHECK POSITIONS ignored — only works in the summary channel (${this.config.summaryNotificationChannel})`
-      );
-      return;
-    }
-    if (!this.summaryMonitor) {
-      this.logger.warn(
-        "⚠️ CHECK POSITIONS received but the summary monitor is not enabled"
       );
       return;
     }
