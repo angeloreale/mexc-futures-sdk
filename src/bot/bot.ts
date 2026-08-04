@@ -169,8 +169,10 @@ export class SignalBot {
     process.once("SIGTERM", () => { void shutdown("SIGTERM"); });
 
     // Emit an initial summary snapshot immediately on startup, before polling begins.
+    // forceFreshPending ensures the plan/stop (Trigger) order APIs are queried and
+    // the pending-orders cache is seeded with live data on first boot.
     try {
-      await this.summaryMonitor.emitSummary();
+      await this.summaryMonitor.emitSummary(true);
       this.logger.info("📊 Initial summary snapshot emitted");
     } catch (error) {
       this.logger.error(
