@@ -93,6 +93,7 @@ export class SignalBot {
 
     // Periodic position summaries — always enabled for local console/file
     // logging; Telegram notifications are sent only when a channel is configured.
+    // Feeds open-position data to the PNL monitor so it doesn't need its own timer.
     this.summaryMonitor = new PositionSummaryMonitor({
       client: this.mexcClient,
       logger: this.logger,
@@ -104,6 +105,7 @@ export class SignalBot {
       slTpStore: this.slTpStore,
       onAlert: (alert) => this.sendPositionAlert(alert),
       slTpRetentionDays: config.logRetentionDays,
+      onSample: (positions) => this.pnlMonitor?.feedPositions(positions),
     });
 
     // Initialize Telegram bot
@@ -187,9 +189,9 @@ export class SignalBot {
         `(every ${this.config.summaryIntervalHours}h, window ${this.config.summaryWindowHours}h)`
     );
 
-    // Start position-close PNL notifications (before Telegram launch to ensure timer is set)
+    // Start position-close PNL notifications (externally fed by summary monitor)
     if (this.pnlMonitor) {
-      this.pnlMonitor.start();
+      this.pnlMonitor.start(/* externalFeed= */ true);
       this.logger.info(
         `📨 PNL notifications → ${this.config.pnlNotificationChannel}`
       );

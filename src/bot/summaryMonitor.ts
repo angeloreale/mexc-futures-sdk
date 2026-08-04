@@ -129,6 +129,12 @@ export interface PositionSummaryMonitorOptions {
   onAlert: OnPositionAlert;
   /** Days after which stale SL/TP entries are pruned (default LOG_RETENTION_DAYS). */
   slTpRetentionDays: number;
+  /**
+   * Optional callback fired after each sample with the active positions.
+   * Use this to feed a PositionClosureMonitor externally, avoiding a
+   * duplicate open-positions API call.
+   */
+  onSample?: (positions: Position[]) => void;
 }
 
 /**
@@ -152,6 +158,7 @@ export class PositionSummaryMonitor {
   private slTpStore: SlTpStore;
   private slTpRetentionMs: number;
   private onAlert: OnPositionAlert;
+  private onSample: ((positions: Position[]) => void) | undefined;
   private stats = new Map<string, PositionStats>();
   private sampleTimer: NodeJS.Timeout | null = null;
   private summaryTimer: NodeJS.Timeout | null = null;
@@ -173,6 +180,7 @@ export class PositionSummaryMonitor {
     this.onSummary = opts.onSummary;
     this.slTpStore = opts.slTpStore;
     this.onAlert = opts.onAlert;
+    this.onSample = opts.onSample;
     this.slTpRetentionMs = Math.max(opts.slTpRetentionDays, 1) * 86400_000;
     this.loadStats();
   }
@@ -234,6 +242,10 @@ export class PositionSummaryMonitor {
       const now = Date.now();
       const seen = new Set<string>();
       const active = positions.filter((p) => p.state !== 3 && p.holdVol > 0);
+
+      // Feed active positions downstream (e.g. PositionClosureMonitor) so they
+      // don't need to make their own open-positions API call.
+      this.onSample?.(active);
 
       for (const p of active) {
         const id = String(p.positionId);

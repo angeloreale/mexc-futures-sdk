@@ -87,6 +87,8 @@ export class PositionClosureMonitor {
   private known = new Map<string, Position>();
   private seeded = false;
   private polling = false;
+  /** When true, positions are fed externally — skip the internal timer. */
+  private externallyFed = false;
 
   constructor(opts: PositionClosureMonitorOptions) {
     this.client = opts.client;
@@ -97,11 +99,22 @@ export class PositionClosureMonitor {
   }
 
   /**
-   * Start polling. The timer is unref'd so it never keeps the process alive
-   * on its own (the Telegram long-polling loop is what holds it open).
+   * Start polling. If positions will be fed externally via {@link feedPositions},
+   * pass `externalFeed=true` to skip the internal timer.
+   *
+   * The timer is unref'd so it never keeps the process alive on its own.
    */
-  start(): void {
+  start(externalFeed = false): void {
     if (this.timer) return;
+    this.externallyFed = externalFeed;
+
+    if (externalFeed) {
+      this.logger.info(
+        "📡 Position closure monitor started (externally fed)"
+      );
+      return;
+    }
+
     this.logger.info(
       `📡 Position closure monitor started (poll every ${this.intervalMs / 1000}s)`
     );
@@ -120,6 +133,28 @@ export class PositionClosureMonitor {
   }
 
   /**
+   * Feed externally-fetched positions into the monitor. Use this when another
+   * component (e.g. PositionSummaryMonitor) is already polling open positions
+   * — avoids duplicate API calls.
+   *
+   * Only active (non-closed, non-zero-volume) positions should be passed.
+   */
+  async feedPositions(activePositions: Position[]): Promise<void> {
+    if (this.polling) return;
+    this.polling = true;
+    try {
+      await this.processPositions(activePositions);
+    } catch (error) {
+      this.logger.warn(
+        "⚠️ Position monitor feed failed:",
+        error instanceof Error ? error.message : error
+      );
+    } finally {
+      this.polling = false;
+    }
+  }
+
+  /**
    * Run one poll cycle. Public so tests can drive it directly.
    */
   async poll(): Promise<void> {
@@ -128,35 +163,7 @@ export class PositionClosureMonitor {
     try {
       const res = await this.client.getOpenPositions();
       const positions: Position[] = Array.isArray(res.data) ? res.data : [];
-
-      // Only genuinely-open positions are tracked. Anything already fully
-      // closed (state 3 or zero remaining volume) is a closure candidate
-      // rather than a live position.
-      const active = positions.filter((p) => p.state !== 3 && p.holdVol > 0);
-      const current = new Map(active.map((p) => [String(p.positionId), p]));
-
-      if (!this.seeded) {
-        this.known = current;
-        this.seeded = true;
-        this.logger.debug(
-          `📡 Seeded position monitor with ${this.known.size} open position(s)`
-        );
-        return;
-      }
-
-      // Positions we tracked that are no longer open = closed.
-      const closed: Position[] = [];
-      for (const [id, lastKnown] of this.known) {
-        if (!current.has(id)) {
-          closed.push(lastKnown);
-        }
-      }
-
-      this.known = current;
-
-      for (const lastKnown of closed) {
-        await this.handleClosed(String(lastKnown.positionId), lastKnown);
-      }
+      await this.processPositions(positions);
     } catch (error) {
       this.logger.warn(
         "⚠️ Position monitor poll failed:",
@@ -164,6 +171,41 @@ export class PositionClosureMonitor {
       );
     } finally {
       this.polling = false;
+    }
+  }
+
+  /**
+   * Core logic shared by {@link poll} and {@link feedPositions}.
+   * Filters active positions, seeds on first call, and detects closures.
+   */
+  private async processPositions(allPositions: Position[]): Promise<void> {
+    // Only genuinely-open positions are tracked. Anything already fully
+    // closed (state 3 or zero remaining volume) is a closure candidate
+    // rather than a live position.
+    const active = allPositions.filter((p) => p.state !== 3 && p.holdVol > 0);
+    const current = new Map(active.map((p) => [String(p.positionId), p]));
+
+    if (!this.seeded) {
+      this.known = current;
+      this.seeded = true;
+      this.logger.debug(
+        `📡 Seeded position monitor with ${this.known.size} open position(s)`
+      );
+      return;
+    }
+
+    // Positions we tracked that are no longer open = closed.
+    const closed: Position[] = [];
+    for (const [id, lastKnown] of this.known) {
+      if (!current.has(id)) {
+        closed.push(lastKnown);
+      }
+    }
+
+    this.known = current;
+
+    for (const lastKnown of closed) {
+      await this.handleClosed(String(lastKnown.positionId), lastKnown);
     }
   }
 
