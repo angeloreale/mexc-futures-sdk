@@ -611,13 +611,23 @@ export class PositionSummaryMonitor {
 
     const results = await Promise.allSettled([
       this.client.getPlanOrders(undefined, 1), // 1 = untriggered
-      this.client.getStopOrders(undefined, 0), // 0 = uncompleted
+      this.client.getStopOrders(undefined, 0, 1), // is_finished=0 (uncompleted), state=1 (untriggered)
     ]);
 
     const extracted = [
       results[0].status === "fulfilled" ? this.extractPlanOrders(results[0].value) : [],
       results[1].status === "fulfilled" ? this.extractStopOrders(results[1].value) : [],
     ];
+
+    // Log any failures at INFO level so operators can see them
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      if (r.status === "rejected") {
+        const src = i === 0 ? "planorder" : "stoporder";
+        const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+        this.logger.warn(`⚠️ Failed to fetch ${src} pending orders: ${msg}`);
+      }
+    }
 
     if (this.logger.isDebugEnabled()) {
       const src = ["planorder", "stoporder"];

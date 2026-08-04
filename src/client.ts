@@ -512,15 +512,18 @@ export class MexcFuturesSDK {
    * Get the Stop-Limit (TP/SL) order list.
    * @param symbol Optional contract symbol
    * @param isFinished Optional final-state filter: 0 = uncompleted, 1 = completed
+   * @param state Optional order state filter: 1=untriggered, 2=cancelled, 3=executed, 4=invalidated, 5=execution failed
    */
   async getStopOrders(
     symbol?: string,
-    isFinished?: 0 | 1
+    isFinished?: 0 | 1,
+    state?: number
   ): Promise<StopOrderListResponse> {
     try {
       const params: Record<string, string | number> = { page_num: 1, page_size: 100 };
       if (symbol) params.symbol = symbol;
       if (isFinished !== undefined) params.is_finished = isFinished;
+      if (state !== undefined) params.state = state;
       const response = await this.httpClient.get(ENDPOINTS.STOP_ORDER_LIST, {
         params,
       });

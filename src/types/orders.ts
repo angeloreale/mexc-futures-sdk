@@ -159,8 +159,9 @@ export interface PlanOrderListResponse {
 // ── Stop-Limit (TP/SL) Order List ──────────────────────────────────
 // MEXC endpoint: GET /api/v1/private/stoporder/list/orders
 // Returns attached TP/SL orders. Filter with `is_finished`: 0 = uncompleted,
-// 1 = completed. Each row carries BOTH the take-profit and stop-loss price
-// for a position.
+// 1 = completed, or `state`: 1=untriggered, 2=cancelled, 3=executed,
+// 4=invalidated, 5=execution failed. Each row carries BOTH the take-profit
+// and stop-loss price for a position.
 
 export interface StopOrder {
   /** Stop-Limit order ID — large ids exceed 2^53, use String(). */
@@ -168,25 +169,51 @@ export interface StopOrder {
   /** Limit order ID (0 when based on a position) */
   orderId?: string | number;
   symbol: string;
-  positionId?: number;
+  positionId?: string | number;
+  /** Stop-loss trigger type: 1=latest price, 2=fair price, 3=index price */
+  lossTrend?: number;
+  /** Take-profit trigger type: 1=latest price, 2=fair price, 3=index price */
+  profitTrend?: number;
   stopLossPrice?: number | string;
   takeProfitPrice?: number | string;
-  /** 0=untriggered, 1=TP triggered, 2=SL triggered */
+  /** 1=untriggered, 2=cancelled, 3=executed, 4=invalidated, 5=execution failed */
+  state?: number;
+  /** 0=not triggered, 1=TP triggered, 2=SL triggered */
   triggerSide?: number;
   /** 1=long, 2=short */
   positionType: number;
   vol?: number | string;
   realityVol?: number | string;
+  /** Order ID after successful placement */
+  placeOrderId?: string | number;
+  errorCode?: number;
   isFinished?: number;
+  version?: number;
+  priceProtect?: number;
+  /** TP/SL quantity type: "SAME" or "SEPARATE" */
+  profitLossVolType?: string;
+  takeProfitVol?: number | string;
+  stopLossVol?: number | string;
   createTime?: number;
   updateTime?: number;
+  /** Quantity type: 1=partial TP/SL, 2=position TP/SL */
+  volType?: number;
+  takeProfitReverse?: number;
+  stopLossReverse?: number;
+  /** 0=market TP, 1=limit TP */
+  takeProfitType?: number;
+  takeProfitOrderPrice?: number | string;
+  /** 0=market SL, 1=limit SL */
+  stopLossType?: number;
+  stopLossOrderPrice?: number | string;
 }
 
 export interface StopOrderListResponse {
   success: boolean;
   code: number;
   message?: string;
-  data: any;
+  /** Array of StopOrder objects, or wrapped in { resultList, orders, list } */
+  data: StopOrder[] | { resultList?: StopOrder[]; orders?: StopOrder[]; list?: StopOrder[] };
 }
 
 // ── Trigger Order (Stop Entry) ────────────────────────────────────
