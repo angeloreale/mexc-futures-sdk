@@ -177,17 +177,7 @@ export class SignalBot {
       );
     }
 
-    // Start periodic position summaries (always active for console/file logging)
-    this.summaryMonitor.start();
-    const summaryDest = this.config.summaryNotificationChannel
-      ? `→ ${this.config.summaryNotificationChannel} `
-      : "(local only) ";
-    this.logger.info(
-      `📊 Position summary ${summaryDest}` +
-        `(every ${this.config.summaryIntervalHours}h, window ${this.config.summaryWindowHours}h)`
-    );
-
-    // Emit an initial summary snapshot to console (and Telegram if configured).
+    // Emit an initial summary snapshot immediately on startup, before polling begins.
     try {
       await this.summaryMonitor.emitSummary();
       this.logger.info("📊 Initial summary snapshot emitted");
@@ -197,6 +187,16 @@ export class SignalBot {
         error instanceof Error ? error.message : error
       );
     }
+
+    // Start periodic position summaries (always active for console/file logging)
+    this.summaryMonitor.start();
+    const summaryDest = this.config.summaryNotificationChannel
+      ? `→ ${this.config.summaryNotificationChannel} `
+      : "(local only) ";
+    this.logger.info(
+      `📊 Position summary ${summaryDest}` +
+        `(every ${this.config.summaryIntervalHours}h, window ${this.config.summaryWindowHours}h)`
+    );
   }
 
   /**
