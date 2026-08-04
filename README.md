@@ -21,6 +21,7 @@ A TypeScript SDK for MEXC Futures trading with REST API and WebSocket support, p
   - [Signal Formats](#signal-formats)
   - [Configuration Reference](#configuration-reference)
   - [Running Locally](#running-locally)
+  - [Position-Close Notifications](#-position-close-notifications)
 - [Creating the Telegram Bot & Adding Channels](#-creating-the-telegram-bot--adding-channels)
 - [Remote Server Deployment](#-remote-server-deployment)
   - [Option A: Manual Setup (Ubuntu/Debian)](#option-a-manual-setup-ubuntudebian)
