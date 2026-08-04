@@ -166,6 +166,7 @@ export class PositionSummaryMonitor {
   private statsRetentionMs: number;
   private lastStatsSave = 0;
   private savingStats = false;
+  private statsPersistLogged = false;
   private readonly STATS_SAVE_THROTTLE_MS = 5000;
 
   constructor(opts: PositionSummaryMonitorOptions) {
@@ -190,6 +191,9 @@ export class PositionSummaryMonitor {
     this.logger.info(
       `📊 Position summary monitor started ` +
         `(window ${this.windowMs / 3600000}h, emit every ${this.intervalMs / 3600000}h)`
+    );
+    this.logger.info(
+      `💾 Position stats will persist to ${path.resolve(this.statsFilePath)}`
     );
     void this.sample();
     this.sampleTimer = setInterval(() => void this.sample(), this.sampleIntervalMs);
@@ -500,6 +504,13 @@ export class PositionSummaryMonitor {
         fs.mkdirSync(dir, { recursive: true });
       }
       fs.writeFileSync(this.statsFilePath, JSON.stringify(data), "utf-8");
+      if (!this.statsPersistLogged) {
+        this.statsPersistLogged = true;
+        this.logger.info(
+          `💾 Position stats persisted to ${path.resolve(this.statsFilePath)} ` +
+            `(${this.stats.size} position(s))`
+        );
+      }
     } catch (error) {
       this.logger.warn(
         "⚠️ Could not persist position stats:",
