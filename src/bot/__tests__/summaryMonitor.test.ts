@@ -65,8 +65,6 @@ function makeMonitor(
     slTpStore: store,
     onAlert,
     slTpRetentionDays: 90,
-    statsFilePath: tempStatsFile(),
-    statsRetentionDays: 90,
     ...opts,
   });
 }
@@ -304,8 +302,6 @@ describe("PositionSummaryMonitor", () => {
       slTpStore: store,
       onAlert,
       slTpRetentionDays: 1,
-      statsFilePath: tempStatsFile(),
-      statsRetentionDays: 1,
     });
 
     expect(store.get("OLD_BTC")).toBeDefined();

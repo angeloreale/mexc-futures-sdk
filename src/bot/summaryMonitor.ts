@@ -129,10 +129,6 @@ export interface PositionSummaryMonitorOptions {
   onAlert: OnPositionAlert;
   /** Days after which stale SL/TP entries are pruned (default LOG_RETENTION_DAYS). */
   slTpRetentionDays: number;
-  /** JSON file where per-position min/max PNL stats are persisted across restarts. */
-  statsFilePath: string;
-  /** Days to retain persisted stats (default LOG_RETENTION_DAYS). */
-  statsRetentionDays: number;
 }
 
 /**
@@ -163,12 +159,6 @@ export class PositionSummaryMonitor {
   /** Tracks which positions already alerted per target, to avoid repeat alerts. */
   private alerted = new Map<string, { sl: boolean; tp: boolean }>();
   private pollLogged = false;
-  private statsFilePath: string;
-  private statsRetentionMs: number;
-  private lastStatsSave = 0;
-  private savingStats = false;
-  private statsPersistLogged = false;
-  private readonly STATS_SAVE_THROTTLE_MS = 5000;
 
   constructor(opts: PositionSummaryMonitorOptions) {
     this.client = opts.client;
@@ -181,8 +171,6 @@ export class PositionSummaryMonitor {
     this.slTpStore = opts.slTpStore;
     this.onAlert = opts.onAlert;
     this.slTpRetentionMs = Math.max(opts.slTpRetentionDays, 1) * 86400_000;
-    this.statsFilePath = opts.statsFilePath;
-    this.statsRetentionMs = Math.max(opts.statsRetentionDays, 1) * 86400_000;
     this.loadStats();
   }
 
@@ -192,9 +180,6 @@ export class PositionSummaryMonitor {
     this.logger.info(
       `📊 Position summary monitor started ` +
         `(window ${this.windowMs / 3600000}h, emit every ${this.intervalMs / 3600000}h)`
-    );
-    this.logger.info(
-      `💾 Position stats will persist to ${path.resolve(this.statsFilePath)}`
     );
     void this.sample();
     this.sampleTimer = setInterval(() => void this.sample(), this.sampleIntervalMs);
@@ -214,7 +199,6 @@ export class PositionSummaryMonitor {
       clearInterval(this.summaryTimer);
       this.summaryTimer = null;
     }
-    this.persistStats(true);
   }
 
   /**
@@ -274,8 +258,8 @@ export class PositionSummaryMonitor {
         }
       }
 
-      // Persist the tracked stats (throttled) so a restart doesn't lose them.
-      this.persistStats();
+      // Log ticker samples so a restart can restore them.
+      this.logTickerEntries(active);
 
       if (!this.pollLogged) {
         this.pollLogged = true;
@@ -398,106 +382,109 @@ export class PositionSummaryMonitor {
     }
   }
 
-  // ── Persistence helpers ───────────────────────────────────────────
+  // ── Ticker-{date}.log persistence helpers ─────────────────────────
 
   /**
-   * Load persisted per-position PNL stats from disk so min/max tracking
-   * survives a restart. Entries with no activity within the retention window
-   * are dropped, and samples outside the trailing max/min window are pruned
-   * (same semantics as live sampling).
+   * Load the ticker log files and rebuild the tracked stats map so
+   * min/max PNL survives a restart. Reads today's and yesterday's
+   * `ticker-YYYY-MM-DD.log` from LOG_DIR. Samples outside the trailing
+   * window are filtered out (same as live sampling).
    */
   private loadStats(): void {
-    try {
-      if (!fs.existsSync(this.statsFilePath)) return;
-      const raw = fs.readFileSync(this.statsFilePath, "utf-8");
-      const data = JSON.parse(raw);
-      const list: any[] = Array.isArray(data?.stats) ? data.stats : [];
-      const now = Date.now();
+    // Logger writes to its logDir. Use a private helper or the Logger's dir.
+    // The Logger doesn't expose logDir public; we accept that ticker must be
+    // in the same place. If no logDir is set, skip.
+    const dir = (this.logger as any).logDir as string | null | undefined;
+    if (!dir) return;
 
-      for (const s of list) {
-        if (!s || typeof s.positionId !== "string") continue;
-        const samples: PnlSample[] = Array.isArray(s.samples)
-          ? s.samples
-              .filter(
-                (x: any) => x && typeof x.ts === "number" && Number.isFinite(x.pnl)
-              )
-              .map((x: any) => ({ ts: x.ts, pnl: x.pnl }))
-          : [];
-        // Retention: drop positions with no activity within the retention period.
-        const lastTs = samples.length
-          ? Math.max(...samples.map((x) => x.ts))
-          : 0;
-        if (now - lastTs > this.statsRetentionMs) continue;
+    const now = Date.now();
+    const today = this.dateStr();
+    const yesterday = this.dateStr(now - 86400_000);
+    const files = [today, yesterday]
+      .map((d) => path.join(dir, `ticker-${d}.log`))
+      .filter((f) => fs.existsSync(f));
 
-        this.stats.set(String(s.positionId), {
-          positionId: String(s.positionId),
-          symbol: String(s.symbol ?? ""),
-          positionType: s.positionType === 2 ? 2 : 1,
-          openType: s.openType === 2 ? 2 : 1,
-          leverage: toFiniteNumber(s.leverage) || 0,
-          openAvgPrice: toFiniteNumber(s.openAvgPrice),
-          margin: toFiniteNumber(s.margin) || 0,
-          samples,
-        });
+    const lines: string[] = [];
+    for (const f of files) {
+      try {
+        const raw = fs.readFileSync(f, "utf-8");
+        lines.push(...raw.split("\n").filter(Boolean));
+      } catch {
+        // file disappeared between stat and read — ignore
       }
+    }
 
-      // Apply the trailing window pruning on load (consistent with live sampling).
-      const cutoff = now - this.windowMs;
-      for (const [id, st] of this.stats) {
-        st.samples = st.samples.filter((x) => x.ts >= cutoff);
-        if (st.samples.length === 0) this.stats.delete(id);
+    for (const line of lines) {
+      let entry: any;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
       }
+      if (!entry || typeof entry.positionId !== "string") continue;
+      const id = entry.positionId;
+      const pnl = toFiniteNumber(entry.pnl);
+      const ts = toFiniteNumber(entry.sampleTs);
+      if (!Number.isFinite(pnl) || !Number.isFinite(ts)) continue;
 
-      if (this.stats.size > 0) {
-        this.logger.info(
-          `📂 Restored ${this.stats.size} position stats from ${this.statsFilePath}`
-        );
+      let st = this.stats.get(id);
+      if (!st) {
+        st = {
+          positionId: id,
+          symbol: String(entry.symbol ?? ""),
+          positionType: entry.positionType === 2 ? 2 : 1,
+          openType: entry.openType === 2 ? 2 : 1,
+          leverage: toFiniteNumber(entry.leverage) || 0,
+          openAvgPrice: toFiniteNumber(entry.openAvgPrice),
+          margin: toFiniteNumber(entry.margin) || 0,
+          samples: [],
+        };
+        this.stats.set(id, st);
       }
-    } catch (error) {
-      this.logger.warn(
-        "⚠️ Could not load persisted position stats — starting fresh:",
-        error instanceof Error ? error.message : error
+      st.samples.push({ ts, pnl });
+    }
+
+    // Apply window pruning.
+    const cutoff = now - this.windowMs;
+    for (const [id, st] of this.stats) {
+      st.samples = st.samples.filter((x) => x.ts >= cutoff);
+      if (st.samples.length === 0) this.stats.delete(id);
+    }
+
+    if (this.stats.size > 0) {
+      this.logger.info(
+        `📂 Restored ${this.stats.size} position stat(s) from ticker-*.log in ${dir}`
       );
     }
   }
 
   /**
-   * Persist the tracked per-position stats to disk. Throttled to avoid disk
-   * churn on the sampling cadence; pass `force` to bypass the throttle (used
-   * on shutdown).
+   * Log one ticker line per tracked open position so a restart can restore
+   * the rolling max/min window from `ticker-YYYY-MM-DD.log`.
    */
-  private persistStats(force = false): void {
-    if (this.savingStats) return;
+  private logTickerEntries(active: Position[]): void {
     const now = Date.now();
-    if (!force && now - this.lastStatsSave < this.STATS_SAVE_THROTTLE_MS) return;
-    this.lastStatsSave = now;
-    this.savingStats = true;
-    try {
-      const data = {
-        version: 1,
-        updatedAt: new Date().toISOString(),
-        stats: Array.from(this.stats.values()),
-      };
-      const dir = path.dirname(this.statsFilePath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      fs.writeFileSync(this.statsFilePath, JSON.stringify(data), "utf-8");
-      if (!this.statsPersistLogged) {
-        this.statsPersistLogged = true;
-        this.logger.info(
-          `💾 Position stats persisted to ${path.resolve(this.statsFilePath)} ` +
-            `(${this.stats.size} position(s))`
-        );
-      }
-    } catch (error) {
-      this.logger.warn(
-        "⚠️ Could not persist position stats:",
-        error instanceof Error ? error.message : error
-      );
-    } finally {
-      this.savingStats = false;
+    for (const p of active) {
+      const id = String(p.positionId);
+      const pnl = toFiniteNumber(p.unRealizedPnl);
+      if (!Number.isFinite(pnl)) continue;
+      this.logger.logTicker({
+        positionId: id,
+        symbol: p.symbol,
+        positionType: p.positionType,
+        openType: p.openType,
+        leverage: p.leverage,
+        openAvgPrice: p.openAvgPrice,
+        margin: p.oim || p.im || 0,
+        pnl,
+        sampleTs: now,
+      });
     }
+  }
+
+  private dateStr(ms?: number): string {
+    const d = ms ? new Date(ms) : new Date();
+    return d.toISOString().slice(0, 10);
   }
 
   // ── Alert helpers ─────────────────────────────────────────────────

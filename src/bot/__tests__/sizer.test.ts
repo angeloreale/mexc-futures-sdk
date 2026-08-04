@@ -22,7 +22,6 @@ const defaultConfig: BotConfig = {
   logLevel: "SILENT",
   baseCurrency: "USDT",
   stateFilePath: "/tmp/test-state.json",
-  summaryStatsFilePath: "/tmp/test-summary-stats.json",
   logDir: "/tmp/test-logs",
   logRetentionDays: 90,
   pnlNotificationChannel: "",

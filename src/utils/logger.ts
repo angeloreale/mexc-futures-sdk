@@ -185,6 +185,37 @@ export class Logger {
   }
 
   /**
+   * Persist a ticker (PNL polling) sample to the ticker-YYYY-MM-DD.log file.
+   * Called on each summary-monitor sample cycle, one line per tracked position.
+   */
+  logTicker(sample: {
+    positionId: string;
+    symbol: string;
+    positionType: number;
+    openType: number;
+    leverage: number;
+    openAvgPrice: number;
+    margin: number;
+    /** Unrealized PNL at sample time */
+    pnl: number;
+    /** Unix ms timestamp of the sample */
+    sampleTs: number;
+  }): void {
+    this.appendJson("ticker", {
+      ts: new Date().toISOString(),
+      positionId: sample.positionId,
+      symbol: sample.symbol,
+      positionType: sample.positionType,
+      openType: sample.openType,
+      leverage: sample.leverage,
+      openAvgPrice: sample.openAvgPrice,
+      margin: sample.margin,
+      pnl: sample.pnl,
+      sampleTs: sample.sampleTs,
+    });
+  }
+
+  /**
    * Flush and close all file streams. Call during graceful shutdown.
    */
   async close(): Promise<void> {

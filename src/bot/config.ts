@@ -99,7 +99,6 @@ export function loadConfig(): BotConfig {
     logLevel,
     baseCurrency,
     stateFilePath,
-    summaryStatsFilePath,
     logDir,
     logRetentionDays,
     pnlNotificationChannel,
