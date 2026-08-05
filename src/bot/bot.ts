@@ -169,34 +169,15 @@ export class SignalBot {
     process.once("SIGINT", () => { void shutdown("SIGINT"); });
     process.once("SIGTERM", () => { void shutdown("SIGTERM"); });
 
-    // Launch Telegram IMMEDIATELY so the bot is listening before we do any
-    // slow API calls below. launch() runs long-polling and never resolves while
-    // active, so we fire-and-forget.
-    void this.telegram.launch().then(() => {
-      this.logger.info("✅ Telegram polling stopped");
-    });
-
-    // Start periodic position summaries (always active for console/file logging).
+    // Start monitors and background work BEFORE awaiting launch() so they
+    // run concurrently with Telegram long-polling.
     this.summaryMonitor.start();
-    const summaryDest = this.config.summaryNotificationChannel
-      ? `→ ${this.config.summaryNotificationChannel} `
-      : "(local only) ";
-    this.logger.info(
-      `📊 Position summary ${summaryDest}` +
-        `(every ${this.config.summaryIntervalHours}h, window ${this.config.summaryWindowHours}h)`
-    );
-
-    // Start position-close PNL notifications (externally fed by summary monitor)
     if (this.pnlMonitor) {
       this.pnlMonitor.start(/* externalFeed= */ true);
-      this.logger.info(
-        `📨 PNL notifications → ${this.config.pnlNotificationChannel}`
-      );
     }
 
-    // Emit an initial summary snapshot in the background — Telegram is already
-    // listening, so any CHECK POSITIONS or signal received during the fetch will
-    // be queued and processed.
+    // Fire the initial summary fetch in the background — it makes several
+    // spaced API calls (~800ms) but Telegram is already listening.
     void this.summaryMonitor.emitSummary(true).then(() => {
       this.logger.info("📊 Initial summary snapshot emitted");
     }).catch((error) => {
@@ -206,7 +187,26 @@ export class SignalBot {
       );
     });
 
+    const summaryDest = this.config.summaryNotificationChannel
+      ? `→ ${this.config.summaryNotificationChannel} `
+      : "(local only) ";
+    this.logger.info(
+      `📊 Position summary ${summaryDest}` +
+        `(every ${this.config.summaryIntervalHours}h, window ${this.config.summaryWindowHours}h)`
+    );
+    if (this.pnlMonitor) {
+      this.logger.info(
+        `📨 PNL notifications → ${this.config.pnlNotificationChannel}`
+      );
+    }
+
     this.logger.info("✅ Bot is running and listening for signals");
+
+    // Block on Telegram long-polling — this keeps the Node process alive and
+    // actually processes incoming messages. Monitors run concurrently via their
+    // own setInterval timers. On shutdown, telegram.stop() causes launch() to
+    // resolve, which lets start() return and the process exit cleanly.
+    await this.telegram.launch();
   }
 
   /**
