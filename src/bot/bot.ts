@@ -26,9 +26,22 @@ import { formatOrderPlacedMessage } from "./orderMessage";
 import { formatPositionAlertMessage } from "./alertMessage";
 import { formatPositionCloseMessage, PositionCloseResult } from "./closeMessage";
 import { formatCancelOrdersMessage, CancelOrdersResult } from "./cancelMessage";
+import { formatReverseMessage, ReverseResult, formatAddToMessage, AddToResult } from "./reverseAddMessage";
 import { SlTpStore } from "./slTpStore";
 import { Position } from "../types/account";
-import { GetOrderResponse } from "../types/orders";
+import { GetOrderResponse, PlanOrderListResponse } from "../types/orders";
+import { ContractDetail } from "../types/market";
+import { ResolvedTrade } from "./types";
+
+/**
+ * Resolved identity of an order — either from a regular (fill) order or
+ * via a plan-order lookup that extracted the fill order ID.
+ */
+interface OrderIdentity {
+  symbol: string;
+  /** 1 = long, 2 = short */
+  positionType: 1 | 2;
+}
 
 /**
  * Main Telegram Signal Bot.
@@ -345,6 +358,48 @@ export class SignalBot {
   }
 
   /**
+   * Send the result of a `REVERSE {orderId}` command.
+   */
+  private async sendReverseResult(res: ReverseResult): Promise<void> {
+    const channel =
+      this.config.summaryNotificationChannel ||
+      this.config.pnlNotificationChannel;
+    if (!channel) return;
+    const text = formatReverseMessage(res);
+    try {
+      await this.telegram.telegram.sendMessage(channel, text, {
+        parse_mode: "HTML",
+      });
+    } catch (error) {
+      this.logger.error(
+        "❌ Failed to send reverse result:",
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+
+  /**
+   * Send the result of an `ADD TO {orderId} {risk%}` command.
+   */
+  private async sendAddToResult(res: AddToResult): Promise<void> {
+    const channel =
+      this.config.summaryNotificationChannel ||
+      this.config.pnlNotificationChannel;
+    if (!channel) return;
+    const text = formatAddToMessage(res);
+    try {
+      await this.telegram.telegram.sendMessage(channel, text, {
+        parse_mode: "HTML",
+      });
+    } catch (error) {
+      this.logger.error(
+        "❌ Failed to send add-to result:",
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+
+  /**
    * Cancel all pending plan (trigger) orders for a given symbol and direction.
    *
    * "CANCEL ETHUSDT LONG" → cancels all untriggered open-long plan orders
@@ -562,6 +617,90 @@ export class SignalBot {
   }
 
   /**
+   * Resolve an order ID to (symbol, positionType) by trying getOrder first,
+   * then falling back to getPlanOrders if the order is a plan/trigger order.
+   *
+   * Plan orders (from @price/EP signals) have a different ID namespace than
+   * regular (fill) orders. When a plan order executes, MEXC populates its
+   * `orderId` field with the fill order ID — that fill order IS findable via
+   * getOrder.  This helper bridges the gap.
+   */
+  private async resolveOrderIdentity(
+    orderId: string
+  ): Promise<OrderIdentity | null> {
+    // 1. Try getOrder (works for market orders and fill orders).
+    try {
+      const orderRes = await this.mexcClient.getOrder(orderId);
+      const data: any = (orderRes as any).data ?? orderRes;
+      const symbol: string = data?.symbol ?? "";
+      const side: number | undefined = data?.side;
+
+      if (symbol && side !== undefined) {
+        // side 1=open long → positionType 1 (LONG)
+        // side 3=open short → positionType 2 (SHORT)
+        const positionType: 1 | 2 = side === 1 ? 1 : side === 3 ? 2 : (side === 2 ? 2 : 1);
+        if ((side === 1 || side === 3) && symbol && (positionType === 1 || positionType === 2)) {
+          this.logger.info(`🔍 Resolved order ${orderId} via getOrder: ${symbol} ${positionType === 1 ? "LONG" : "SHORT"}`);
+          return { symbol, positionType };
+        }
+      }
+    } catch {
+      // getOrder threw — order not found as a regular order. Fall through.
+      this.logger.debug(`🔍 getOrder failed for ${orderId} — trying plan orders`);
+    }
+
+    // 2. Fall back to plan orders. Fetch untriggered (state 1) AND executed (state 3).
+    try {
+      const planRes: PlanOrderListResponse = await this.mexcClient.getPlanOrders(
+        undefined, "1,3"
+      );
+      const planData: any = (planRes as any).data ?? planRes;
+      const plans: any[] = Array.isArray(planData)
+        ? planData
+        : Array.isArray(planData?.orders) ? planData.orders
+        : Array.isArray(planData?.resultList) ? planData.resultList
+        : Array.isArray(planData?.list) ? planData.list
+        : [];
+
+      for (const p of plans) {
+        const pid = String(p.id ?? p.orderId ?? "");
+        if (pid !== orderId) continue;
+
+        const symbol = String(p.symbol ?? "");
+        const side = Number(p.side);
+        if (!symbol || (side !== 1 && side !== 3)) continue;
+
+        // If the plan order executed (state 3), try to resolve via its fill orderId.
+        if (Number(p.state) === 3 && p.orderId && String(p.orderId) !== "0") {
+          const fillId = String(p.orderId);
+          this.logger.info(`🔍 Plan order ${orderId} executed → fill order ${fillId}`);
+          try {
+            const fillRes = await this.mexcClient.getOrder(fillId);
+            const fillData: any = (fillRes as any).data ?? fillRes;
+            const fillSymbol = fillData?.symbol ?? "";
+            const fillSide = Number(fillData?.side);
+            if (fillSymbol && (fillSide === 1 || fillSide === 3)) {
+              const positionType: 1 | 2 = fillSide === 1 ? 1 : 2;
+              return { symbol: fillSymbol, positionType };
+            }
+          } catch {
+            this.logger.warn(`⚠️ Fill order ${fillId} not found — using plan-order metadata`);
+          }
+        }
+
+        // Fall back to plan-order metadata.
+        const positionType: 1 | 2 = side === 1 ? 1 : 2;
+        this.logger.info(`🔍 Resolved order ${orderId} via plan order: ${symbol} ${positionType === 1 ? "LONG" : "SHORT"}`);
+        return { symbol, positionType };
+      }
+    } catch (e) {
+      this.logger.debug(`🔍 getPlanOrders also failed for ${orderId}: ${e instanceof Error ? e.message : e}`);
+    }
+
+    return null;
+  }
+
+  /**
    * Close a position immediately by its MEXC official order ID.
    * Resolves via the MEXC `getOrder` API (no local order-ID storage).
    *
@@ -582,37 +721,14 @@ export class SignalBot {
 
     this.logger.info(`🔚 Close requested for order ${orderId}`);
 
-    // 1. Resolve the order via MEXC API.
-    let orderRes: GetOrderResponse;
-    try {
-      orderRes = await this.mexcClient.getOrder(orderId);
-    } catch (error) {
-      this.logger.error(
-        `❌ Failed to fetch order ${orderId}:`,
-        error instanceof Error ? error.message : error
-      );
-      await this.sendCloseResult({
-        status: "unknown",
-        queriedId: orderId,
-      });
+    // 1. Resolve order identity — tries getOrder first, then plan orders.
+    const identity = await this.resolveOrderIdentity(orderId);
+    if (!identity) {
+      this.logger.error(`❌ Could not resolve order ${orderId}`);
+      await this.sendCloseResult({ status: "unknown", queriedId: orderId });
       return;
     }
-
-    const data: any = (orderRes as any).data ?? orderRes;
-    const symbol: string = data?.symbol ?? "";
-    const side: number | undefined = data?.side;
-    const positionType: 1 | 2 | undefined =
-      side === 1 || side === 3 ? 1 : side === 2 || side === 4 ? 2 : undefined;
-    if (!symbol || !positionType) {
-      this.logger.error(
-        `❌ Could not resolve order ${orderId} to a symbol/positionType`
-      );
-      await this.sendCloseResult({
-        status: "unknown",
-        queriedId: orderId,
-      });
-      return;
-    }
+    const { symbol, positionType } = identity;
 
     // 2. Find the matching open position.
     let positions: Position[] = [];
@@ -704,6 +820,405 @@ export class SignalBot {
   }
 
   /**
+   * Reverse a position: close it fully, then open the opposite direction
+   * at market price with mirrored SL/TP distance.
+   *
+   * "REVERSE {orderId}" → close LONG → open SHORT (or vice versa).
+   */
+  private async handleReversePosition(
+    orderId: string,
+    chatId: string,
+    messageId: number
+  ): Promise<void> {
+    if (this.state.isProcessed(chatId, messageId)) {
+      this.logger.debug(`⏭️ Reverse ${orderId} already processed`);
+      return;
+    }
+    this.state.markProcessed(chatId, messageId);
+
+    this.logger.info(`🔄 Reverse requested for order ${orderId}`);
+
+    // 1. Resolve order identity.
+    const identity = await this.resolveOrderIdentity(orderId);
+    if (!identity) {
+      this.logger.error(`❌ Could not resolve order ${orderId} for reverse`);
+      await this.sendReverseResult({ status: "unknown", queriedId: orderId });
+      return;
+    }
+    const { symbol, positionType } = identity;
+    const originalDir = positionType === 1 ? "LONG" : "SHORT";
+
+    // 2. Find the matching open position.
+    let positions: Position[] = [];
+    try {
+      const res = await this.mexcClient.getOpenPositions();
+      positions = Array.isArray(res.data) ? res.data : [];
+    } catch (error) {
+      this.logger.error("❌ Failed to fetch open positions for reverse:", error instanceof Error ? error.message : error);
+      await this.sendReverseResult({
+        status: "error", queriedId: orderId, symbol,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+
+    const position = positions.find(
+      (p) => p.symbol === symbol && p.positionType === positionType && p.state !== 3 && p.holdVol > 0
+    );
+    if (!position) {
+      await this.sendReverseResult({ status: "not-open", queriedId: orderId, symbol });
+      return;
+    }
+
+    // 3. Get current price.
+    let currentPrice = 0;
+    try {
+      const ticker = await this.mexcClient.getTicker(symbol);
+      currentPrice = ticker?.data?.lastPrice ?? 0;
+    } catch { /* fall through with 0 */ }
+    if (!currentPrice || currentPrice <= 0) {
+      await this.sendReverseResult({
+        status: "error", queriedId: orderId, symbol,
+        error: "Could not resolve current market price",
+      });
+      return;
+    }
+
+    // 4. Get stored SL/TP for this symbol (for mirroring distance).
+    const slTp = this.slTpStore.get(symbol);
+    let newSl: number;
+    let newTp: number;
+
+    if (slTp && slTp.sl > 0 && slTp.tp > 0) {
+      // Mirror the SL/TP distance from current price.
+      const slDist = Math.abs(currentPrice - slTp.sl);
+      const tpDist = Math.abs(slTp.tp - currentPrice);
+
+      if (positionType === 1) {
+        // Was LONG → now SHORT: SL above, TP below
+        newSl = currentPrice + slDist;
+        newTp = currentPrice - tpDist;
+      } else {
+        // Was SHORT → now LONG: SL below, TP above
+        newSl = currentPrice - slDist;
+        newTp = currentPrice + tpDist;
+      }
+      this.logger.info(
+        `🔄 Mirroring SL/TP: was SL=${slTp.sl} TP=${slTp.tp} → new SL=${newSl} TP=${newTp} (dist: sl=${slDist.toFixed(4)} tp=${tpDist.toFixed(4)})`
+      );
+    } else {
+      // No stored SL/TP — derive from position's holdAvgPrice and a 2% distance heuristic.
+      const dist = currentPrice * 0.02;
+      if (positionType === 1) {
+        newSl = currentPrice + dist;
+        newTp = currentPrice - dist * 1.5;
+      } else {
+        newSl = currentPrice - dist;
+        newTp = currentPrice + dist * 1.5;
+      }
+      this.logger.info(
+        `🔄 No stored SL/TP — using heuristic: SL=${newSl} TP=${newTp} (2% distance)`
+      );
+    }
+
+    // 5. Close the position fully (100%).
+    const closeResult = await this.executor.closePosition(
+      symbol, position, currentPrice, positionType, position.openType, position.leverage, 100
+    );
+    if (!closeResult.success) {
+      await this.sendReverseResult({
+        status: "error", queriedId: orderId, symbol,
+        originalDirection: originalDir,
+        error: closeResult.error ?? "Close order failed",
+      });
+      return;
+    }
+    this.slTpStore.remove(symbol);
+
+    // Dry-run: stop after the close step.
+    if (this.config.dryRun) {
+      await this.sendReverseResult({
+        status: "dry-run", queriedId: orderId, symbol,
+        originalDirection: originalDir,
+        newDirection: positionType === 1 ? "SHORT" : "LONG",
+        leverage: position.leverage,
+        closedVolume: position.holdVol,
+        price: currentPrice || undefined,
+        newVolume: 0,
+        stopLoss: newSl,
+        takeProfit: newTp,
+      });
+      return;
+    }
+
+    if (!this.config.tradingEnabled) {
+      await this.sendReverseResult({
+        status: "disabled", queriedId: orderId,
+      });
+      return;
+    }
+
+    // 6. Fetch equity for sizing the new position.
+    let equity: number;
+    try {
+      equity = await this.fetchEquity();
+    } catch (error) {
+      await this.sendReverseResult({
+        status: "error", queriedId: orderId, symbol,
+        originalDirection: originalDir,
+        error: "Failed to fetch equity for sizing",
+      });
+      return;
+    }
+
+    // 7. Get contract details for the symbol.
+    await this.resolver.refreshIfNeeded();
+    const contract = await this.resolver.resolve(symbol);
+    if (!contract) {
+      await this.sendReverseResult({
+        status: "error", queriedId: orderId, symbol,
+        originalDirection: originalDir,
+        error: `Symbol ${symbol} not tradable`,
+      });
+      return;
+    }
+
+    // 8. Build a synthetic TradeSignal for the opposite direction and size it.
+    const newAction = positionType === 1 ? "SELL" : "BUY";
+    const syntheticSignal: TradeSignal = {
+      raw: `REVERSE ${orderId}`,
+      action: newAction as "BUY" | "SELL",
+      rawSymbol: symbol.replace("_", ""),
+      entry: currentPrice,
+      sl: newSl,
+      tp: [newTp],
+      orderType: "market",
+    };
+
+    const resolvedTrade = calculatePositionSize(
+      syntheticSignal, contract, equity, currentPrice, this.config, this.logger
+    );
+    if (!resolvedTrade) {
+      await this.sendReverseResult({
+        status: "error", queriedId: orderId, symbol,
+        originalDirection: originalDir,
+        error: "Position sizing failed for reversed trade",
+      });
+      return;
+    }
+
+    // 9. Execute the new market order.
+    const records = await this.executor.execute(resolvedTrade);
+    const record = records[0];
+
+    if (record?.success) {
+      this.registerSlTp(record);
+      await this.sendReverseResult({
+        status: "success", queriedId: orderId, symbol,
+        originalDirection: originalDir,
+        newDirection: positionType === 1 ? "SHORT" : "LONG",
+        leverage: position.leverage,
+        closedVolume: closeResult.volume ?? position.holdVol,
+        newVolume: resolvedTrade.volume,
+        price: currentPrice || undefined,
+        closeOrderId: closeResult.orderId,
+        newOrderId: record.orderId,
+        stopLoss: resolvedTrade.stopLossPrice,
+        takeProfit: resolvedTrade.takeProfitPrice,
+      });
+    } else {
+      await this.sendReverseResult({
+        status: "error", queriedId: orderId, symbol,
+        originalDirection: originalDir,
+        error: record?.error ?? "Reverse order failed",
+      });
+    }
+  }
+
+  /**
+   * Add to an existing position at market price with the same SL/TP.
+   *
+   * "ADD TO {orderId} [{riskPercent}%]" — the risk percent determines the
+   * new lotsize as a percentage of equity (default 1%). SL/TP are inherited
+   * from the original position (via slTpStore).
+   */
+  private async handleAddToPosition(
+    orderId: string,
+    chatId: string,
+    messageId: number,
+    riskPercent: number
+  ): Promise<void> {
+    if (this.state.isProcessed(chatId, messageId)) {
+      this.logger.debug(`⏭️ ADD TO ${orderId} already processed`);
+      return;
+    }
+    this.state.markProcessed(chatId, messageId);
+
+    // Clamp risk percent to 0.1–6%
+    const pct = Math.min(6, Math.max(0.1, riskPercent));
+    this.logger.info(`➕ ADD TO requested for order ${orderId} at ${pct}% risk`);
+
+    // 1. Resolve order identity.
+    const identity = await this.resolveOrderIdentity(orderId);
+    if (!identity) {
+      this.logger.error(`❌ Could not resolve order ${orderId} for add-to`);
+      await this.sendAddToResult({ status: "unknown", queriedId: orderId });
+      return;
+    }
+    const { symbol, positionType } = identity;
+    const dir = positionType === 1 ? "LONG" : "SHORT";
+
+    // 2. Find the matching open position.
+    let positions: Position[] = [];
+    try {
+      const res = await this.mexcClient.getOpenPositions();
+      positions = Array.isArray(res.data) ? res.data : [];
+    } catch (error) {
+      this.logger.error("❌ Failed to fetch open positions:", error instanceof Error ? error.message : error);
+      await this.sendAddToResult({
+        status: "error", queriedId: orderId, symbol,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+
+    const position = positions.find(
+      (p) => p.symbol === symbol && p.positionType === positionType && p.state !== 3 && p.holdVol > 0
+    );
+    if (!position) {
+      await this.sendAddToResult({ status: "not-open", queriedId: orderId, symbol });
+      return;
+    }
+
+    // 3. Get current price.
+    let currentPrice = 0;
+    try {
+      const ticker = await this.mexcClient.getTicker(symbol);
+      currentPrice = ticker?.data?.lastPrice ?? 0;
+    } catch { /* fall through */ }
+    if (!currentPrice || currentPrice <= 0) {
+      await this.sendAddToResult({
+        status: "error", queriedId: orderId, symbol,
+        error: "Could not resolve current market price",
+      });
+      return;
+    }
+
+    // 4. Get stored SL/TP — required for consistent risk sizing.
+    const slTp = this.slTpStore.get(symbol);
+    if (!slTp || slTp.sl <= 0 || slTp.tp <= 0) {
+      await this.sendAddToResult({
+        status: "error", queriedId: orderId, symbol,
+        error: "No stored SL/TP found for this position. ADD TO requires an existing position with known SL/TP levels.",
+      });
+      return;
+    }
+
+    // Validate SL is on the correct side of current price for the direction.
+    const slValid = positionType === 1
+      ? slTp.sl < currentPrice  // LONG: SL must be below entry
+      : slTp.sl > currentPrice; // SHORT: SL must be above entry
+    if (!slValid) {
+      await this.sendAddToResult({
+        status: "error", queriedId: orderId, symbol, direction: dir,
+        error: `SL (${slTp.sl}) is on the wrong side of current price (${currentPrice}) for a ${dir} — cannot safely add.`,
+      });
+      return;
+    }
+
+    // 5. Fetch equity.
+    let equity: number;
+    try {
+      equity = await this.fetchEquity();
+    } catch (error) {
+      await this.sendAddToResult({
+        status: "error", queriedId: orderId, symbol,
+        error: "Failed to fetch equity for sizing",
+      });
+      return;
+    }
+
+    // 6. Get contract details.
+    await this.resolver.refreshIfNeeded();
+    const contract = await this.resolver.resolve(symbol);
+    if (!contract) {
+      await this.sendAddToResult({
+        status: "error", queriedId: orderId, symbol,
+        error: `Symbol ${symbol} not tradable`,
+      });
+      return;
+    }
+
+    // 7. Build a synthetic TradeSignal and size it.
+    const action = positionType === 1 ? "BUY" : "SELL";
+    const syntheticSignal: TradeSignal = {
+      raw: `ADD TO ${orderId}`,
+      action: action as "BUY" | "SELL",
+      rawSymbol: symbol.replace("_", ""),
+      entry: currentPrice,
+      sl: slTp.sl,
+      tp: [slTp.tp],
+      orderType: "market",
+      riskPercentOverride: pct,
+    };
+
+    const resolvedTrade = calculatePositionSize(
+      syntheticSignal, contract, equity, currentPrice, this.config, this.logger
+    );
+    if (!resolvedTrade) {
+      await this.sendAddToResult({
+        status: "error", queriedId: orderId, symbol, direction: dir,
+        error: "Position sizing failed — risk amount may be too small for min order volume",
+      });
+      return;
+    }
+
+    // Dry-run.
+    if (this.config.dryRun) {
+      await this.sendAddToResult({
+        status: "dry-run", queriedId: orderId, symbol,
+        direction: dir, leverage: position.leverage,
+        addedVolume: resolvedTrade.volume,
+        totalVolume: position.holdVol + resolvedTrade.volume,
+        price: currentPrice || undefined,
+        riskPercent: pct,
+        stopLoss: resolvedTrade.stopLossPrice,
+        takeProfit: resolvedTrade.takeProfitPrice,
+      });
+      return;
+    }
+
+    if (!this.config.tradingEnabled) {
+      await this.sendAddToResult({ status: "disabled", queriedId: orderId });
+      return;
+    }
+
+    // 8. Execute the market order.
+    const records = await this.executor.execute(resolvedTrade);
+    const record = records[0];
+
+    if (record?.success) {
+      this.registerSlTp(record);
+      await this.sendAddToResult({
+        status: "success", queriedId: orderId, symbol,
+        direction: dir, leverage: position.leverage,
+        addedVolume: resolvedTrade.volume,
+        totalVolume: position.holdVol + resolvedTrade.volume,
+        price: currentPrice || undefined,
+        orderId: record.orderId,
+        riskPercent: pct,
+        stopLoss: resolvedTrade.stopLossPrice,
+        takeProfit: resolvedTrade.takeProfitPrice,
+      });
+    } else {
+      await this.sendAddToResult({
+        status: "error", queriedId: orderId, symbol, direction: dir,
+        error: record?.error ?? "Add-to order failed",
+      });
+    }
+  }
+
+  /**
    * Send an order-placed notification to the summary channel.
    */
   private async sendOrderPlacedNotification(record: TradeRecord): Promise<void> {
@@ -783,6 +1298,24 @@ export class SignalBot {
     if (closeMatch) {
       const closePercent = closeMatch[2] ? parseFloat(closeMatch[2]) : undefined;
       await this.handleClosePosition(closeMatch[1], chatId, messageId, closePercent);
+      return;
+    }
+
+    // Reverse command: "REVERSE {orderId}" — closes the position and opens
+    // the opposite direction at market price, mirroring SL/TP distance.
+    const reverseMatch = /^reverse\s+(\S+)\s*$/i.exec(text.trim());
+    if (reverseMatch) {
+      await this.handleReversePosition(reverseMatch[1], chatId, messageId);
+      return;
+    }
+
+    // Add-to command: "ADD TO {orderId} [{riskPercent}%]" — opens an
+    // additional market order in the same direction with the same SL/TP,
+    // sized at the given risk% of equity (default 1%).
+    const addToMatch = /^add\s+to\s+(\S+)(?:\s+(\d+(?:\.\d+)?)\s*%?)?\s*$/i.exec(text.trim());
+    if (addToMatch) {
+      const riskPercent = addToMatch[2] ? parseFloat(addToMatch[2]) : 1;
+      await this.handleAddToPosition(addToMatch[1], chatId, messageId, riskPercent);
       return;
     }
 

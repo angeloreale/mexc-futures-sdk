@@ -8,6 +8,15 @@ import { toFiniteNumber } from "../utils/numbers";
 import { AccountSnapshot } from "./pnlMonitor";
 import { SlTpStore, SlTpEntry } from "./slTpStore";
 
+/**
+ * Shorten a long numeric ID for compact display (e.g. "817027833053397504" → "…397504").
+ */
+function shortId(id: string, tail = 6): string {
+  if (!id) return "—";
+  if (id.length <= tail + 1) return id;
+  return `…${id.slice(-tail)}`;
+}
+
 /** A single unrealized-PNL sample for one position. */
 interface PnlSample {
   ts: number;
@@ -42,6 +51,8 @@ export interface OpenPositionSummary {
   minPnl: number;
   /** Initial margin of the position */
   margin: number;
+  /** Fill order ID (regular MEXC order ID) — use this for CLOSE/REVERSE/ADD TO commands. */
+  fillOrderId?: string;
 }
 
 /** A pending order shown as a single line in the summary. */
@@ -407,6 +418,17 @@ export class PositionSummaryMonitor {
         };
       });
 
+      // Resolve fill order IDs for open positions so users know what ID to
+      // use with CLOSE / REVERSE / ADD TO commands.
+      await this.spaceRequest();
+      const fillOrderMap = await this.resolveFillOrderIds(open);
+
+      // Attach fill order IDs to the open position summaries.
+      for (const pos of openPositions) {
+        const key = `${pos.symbol}:${pos.positionType}`;
+        pos.fillOrderId = fillOrderMap.get(key);
+      }
+
       // Pending orders: tries the documented open-orders endpoint plus the
       // planorder/stoporder lists as fallbacks, merges and dedupes. Each
       // source fails independently and degrades gracefully.
@@ -493,7 +515,8 @@ export class PositionSummaryMonitor {
         const icon = p.currentPnl >= 0 ? "🟢" : "🔴";
         this.logger.info(
           `  ${icon} ${p.symbol} ${dir} ${p.leverage}x · Entry ${fmtN(p.openAvgPrice)} · ` +
-            `PNL ${fmtS(p.currentPnl)} ${cur} · max ${fmtS(p.maxPnl)} / min ${fmtS(p.minPnl)}`
+            `PNL ${fmtS(p.currentPnl)} ${cur} · max ${fmtS(p.maxPnl)} / min ${fmtS(p.minPnl)}` +
+            `${p.fillOrderId ? ` · close ${shortId(p.fillOrderId)}` : ""}`
         );
       }
     }
@@ -819,6 +842,43 @@ export class PositionSummaryMonitor {
     if (Array.isArray(raw?.resultList)) return raw.resultList;
     if (Array.isArray(raw?.list)) return raw.list;
     return [];
+  }
+
+  /**
+   * Fetch executed plan orders (state 3) and build a map of
+   *   `${symbol}:${positionType}` → fillOrderId
+   * so the summary can show the fill order ID users should use for
+   * CLOSE / REVERSE / ADD TO commands.
+   */
+  private async resolveFillOrderIds(
+    openPositions: Position[]
+  ): Promise<Map<string, string>> {
+    const map = new Map<string, string>();
+    try {
+      const res = await this.client.getPlanOrders(undefined, "3"); // executed only
+      const list = this.asList((res as any).data);
+      for (const o of list) {
+        if (!o || typeof o !== "object") continue;
+        const side = Number(o.side);
+        if (side !== 1 && side !== 3) continue; // open-side only
+        const symbol = String(o.symbol ?? "");
+        const fillOrderId = String(o.orderId ?? "");
+        if (!symbol || !fillOrderId || fillOrderId === "0" || fillOrderId === "undefined") continue;
+        const positionType = side === 1 ? 1 : 2;
+        const key = `${symbol}:${positionType}`;
+        if (!map.has(key)) {
+          map.set(key, fillOrderId);
+        }
+      }
+      this.logger.debug(
+        `🔍 Resolved ${map.size} fill order ID(s) for open positions`
+      );
+    } catch (e) {
+      this.logger.debug(
+        `⚠️ Could not resolve fill order IDs: ${e instanceof Error ? e.message : e}`
+      );
+    }
+    return map;
   }
 
   /**
