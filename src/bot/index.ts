@@ -22,7 +22,7 @@ import { SignalBot } from "./bot";
 
 async function main(): Promise<void> {
   console.log("═══════════════════════════════════════════");
-  console.log("  MEXC Telegram Signal Bot");
+  console.log("  Dupip Crypto Connector");
   console.log("═══════════════════════════════════════════");
 
   try {

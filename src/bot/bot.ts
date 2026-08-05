@@ -147,7 +147,7 @@ export class SignalBot {
    * Start the bot — connect to Telegram and begin listening.
    */
   async start(): Promise<void> {
-    this.logger.info("🤖 Starting Signal Bot...");
+    this.logger.info("🤖 Starting Dupip Crypto Connector...");
     this.logger.info(
       `   Mode: ${this.config.dryRun ? "DRY RUN" : "LIVE"}`
     );
