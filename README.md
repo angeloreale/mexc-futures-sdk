@@ -290,10 +290,11 @@ Order IDs are shown shortened for a compact layout — the full IDs appear in th
 
 **On-demand summary:**
 
-Send `CHECK POSITIONS` to the summary channel and the bot will emit the position summary **immediately**, without waiting for the next `SUMMARY_INTERVAL_HOURS` tick. The command is case-insensitive, works regardless of whether the summary channel is listed in `ALLOWED_CHANNELS`, and each message is only honored once (idempotent across restarts).
+Send `CHECK POSITIONS` (or the shorthand `@`) to the summary channel and the bot will emit the position summary **immediately**, without waiting for the next `SUMMARY_INTERVAL_HOURS` tick. Both forms are case-insensitive (for the word form), work regardless of whether the summary channel is listed in `ALLOWED_CHANNELS`, and each message is only honored once (idempotent across restarts).
 
 ```
 CHECK POSITIONS
+@
 ```
 
 > 💡 The on-demand summary reflects the same data as the periodic one, including the current / max / min PNL tracked over the trailing window. If the summary feature is disabled (no `SUMMARY_NOTIFICATION_CHANNEL`), the command is ignored.
@@ -314,13 +315,21 @@ The SL/TP levels come from the bot's own order execution; manually placed positi
 
 **Closing a position manually:**
 
-Send `Close {orderId}` to an allowed channel and the bot will resolve the MEXC official order ID via the API, find the matching open position, and close it immediately with a market order. A confirmation is sent to the summary channel.
+Send `Close {id}` to an allowed channel and the bot will resolve the position and close it immediately with a market order. A confirmation is sent to the summary channel.
+
+The summary shows the recommended identifier for each open position — its **position ID** — as `🆔 {positionId} · CLOSE {positionId}`:
 
 ```
-Close 1234567890
+Close 1462152523
 ```
 
-The order ID must be a MEXC official order ID (the one shown in the order-placed alert). The command is idempotent and requires the channel to be in `ALLOWED_CHANNELS`.
+A **partial close** is supported by appending a percentage:
+
+```
+Close 1462152523 30%
+```
+
+The position ID is preferred because it always exists on the open-positions API and carries the authoritative position direction, so closing by it never hits MEXC's "wrong direction" error (important in hedge mode, where a symbol can hold both a LONG and a SHORT simultaneously). For backward compatibility the command still accepts a MEXC fill order ID or plan/trigger order ID, which are resolved via the API. The command is idempotent and requires the channel to be in `ALLOWED_CHANNELS`.
 
 ### 🚀 Order Placement Alerts
 
