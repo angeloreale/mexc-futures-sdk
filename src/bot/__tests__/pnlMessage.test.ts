@@ -13,6 +13,7 @@ function makeInfo(overrides?: Partial<ClosedPositionInfo>): ClosedPositionInfo {
     leverage: 10,
     openAvgPrice: 67000,
     closeAvgPrice: 69000,
+    holdVol: 1,
     realisedPnl: 176.7,
     pnlPercent: 5.12,
     margin: 3450,
