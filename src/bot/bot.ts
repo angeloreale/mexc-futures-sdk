@@ -23,6 +23,7 @@ import { formatPositionSummaryMessage } from "./summaryMessage";
 import { formatOrderPlacedMessage } from "./orderMessage";
 import { formatPositionAlertMessage } from "./alertMessage";
 import { formatPositionCloseMessage, PositionCloseResult } from "./closeMessage";
+import { formatCancelOrdersMessage, CancelOrdersResult } from "./cancelMessage";
 import { SlTpStore } from "./slTpStore";
 import { Position } from "../types/account";
 import { GetOrderResponse } from "../types/orders";
@@ -298,6 +299,182 @@ export class SignalBot {
   }
 
   /**
+   * Send the result of a `CANCEL {SYMBOL} {DIRECTION}` command.
+   */
+  private async sendCancelResult(res: CancelOrdersResult): Promise<void> {
+    const channel =
+      this.config.summaryNotificationChannel ||
+      this.config.pnlNotificationChannel;
+    if (!channel) return;
+    const text = formatCancelOrdersMessage(res);
+    try {
+      await this.telegram.telegram.sendMessage(channel, text, {
+        parse_mode: "HTML",
+      });
+    } catch (error) {
+      this.logger.error(
+        "❌ Failed to send cancel result:",
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+
+  /**
+   * Cancel all pending plan (trigger) orders for a given symbol and direction.
+   *
+   * "CANCEL ETHUSDT LONG" → cancels all untriggered open-long plan orders
+   * for ETH_USDT.
+   */
+  private async handleCancelOrders(
+    rawSymbol: string,
+    direction: "LONG" | "SHORT",
+    chatId: string,
+    messageId: number
+  ): Promise<void> {
+    if (this.state.isProcessed(chatId, messageId)) {
+      this.logger.debug(
+        `⏭️ CANCEL ${rawSymbol} ${direction} already processed`
+      );
+      return;
+    }
+    this.state.markProcessed(chatId, messageId);
+
+    // Normalize the symbol (e.g. "ETHUSDT" → "ETH_USDT")
+    const normalized = normalizeSymbol(rawSymbol);
+    if (!normalized) {
+      this.logger.warn(
+        `⚠️ CANCEL: could not normalize symbol "${rawSymbol}"`
+      );
+      await this.sendCancelResult({
+        status: "error",
+        symbol: rawSymbol.toUpperCase(),
+        direction,
+        found: 0,
+        cancelled: 0,
+        failed: 0,
+        error: `Could not normalize symbol "${rawSymbol}". Use format like ETHUSDT or ETH_USDT.`,
+      });
+      return;
+    }
+    const symbol = normalized;
+
+    // Map direction to MEXC side for plan orders: LONG→1, SHORT→3
+    const targetSide = direction === "LONG" ? 1 : 3;
+
+    this.logger.info(`🗑️ CANCEL requested: ${symbol} ${direction}`);
+
+    // Dry-run / disabled checks
+    if (this.config.dryRun) {
+      this.logger.info(`🧪 [DRY RUN] Would cancel ${symbol} ${direction} plan orders`);
+      await this.sendCancelResult({
+        status: "dry-run",
+        symbol,
+        direction,
+        found: 0,
+        cancelled: 0,
+        failed: 0,
+      });
+      return;
+    }
+    if (!this.config.tradingEnabled) {
+      await this.sendCancelResult({
+        status: "disabled",
+        symbol,
+        direction,
+        found: 0,
+        cancelled: 0,
+        failed: 0,
+      });
+      return;
+    }
+
+    // Fetch untriggered plan orders for this symbol only.
+    let orders: any[];
+    try {
+      const res = await this.mexcClient.getPlanOrders(symbol, "1");
+      orders = Array.isArray(res.data) ? res.data : [];
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `❌ Failed to fetch plan orders for ${symbol}: ${msg}`
+      );
+      await this.sendCancelResult({
+        status: "error",
+        symbol,
+        direction,
+        found: 0,
+        cancelled: 0,
+        failed: 0,
+        error: `Failed to fetch plan orders: ${msg}`,
+      });
+      return;
+    }
+
+    // Filter by side
+    const matching = orders.filter((o) => Number(o.side) === targetSide);
+
+    if (matching.length === 0) {
+      await this.sendCancelResult({
+        status: "no-orders",
+        symbol,
+        direction,
+        found: 0,
+        cancelled: 0,
+        failed: 0,
+      });
+      return;
+    }
+
+    this.logger.info(
+      `🗑️ Found ${matching.length} matching ${direction} plan order(s) for ${symbol}`
+    );
+
+    // Cancel each plan order by its ID. The cancel endpoint accepts plan-order
+    // IDs the same way as regular order IDs.
+    const cancelledIds: string[] = [];
+    const failedDetails: { id: string; reason: string }[] = [];
+
+    for (const o of matching) {
+      const oid = String(o.id ?? o.orderId ?? "");
+      if (!oid) continue;
+      try {
+        await this.mexcClient.cancelOrder([oid]);
+        cancelledIds.push(oid);
+        this.logger.info(`🗑️ Cancelled plan order ${oid} (${symbol} ${direction})`);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        failedDetails.push({ id: oid, reason: msg });
+        this.logger.error(
+          `❌ Failed to cancel plan order ${oid} (${symbol}): ${msg}`
+        );
+      }
+    }
+
+    if (failedDetails.length === 0) {
+      await this.sendCancelResult({
+        status: "success",
+        symbol,
+        direction,
+        found: matching.length,
+        cancelled: cancelledIds.length,
+        failed: 0,
+        cancelledIds,
+      });
+    } else {
+      await this.sendCancelResult({
+        status: "partial",
+        symbol,
+        direction,
+        found: matching.length,
+        cancelled: cancelledIds.length,
+        failed: failedDetails.length,
+        cancelledIds: cancelledIds.length > 0 ? cancelledIds : undefined,
+        failedDetails,
+      });
+    }
+  }
+
+  /**
    * Store the SL/TP levels from a successfully placed trade so the summary
    * monitor can evaluate >50%-of-way alerts for the resulting position.
    */
@@ -537,6 +714,19 @@ export class SignalBot {
     const chatUsername = msg.chat?.username;
     if (!this.isAllowedChannel(chatId, chatUsername)) {
       return; // silently ignore
+    }
+
+    // Cancel command: "CANCEL {SYMBOL} {DIRECTION}" — finds pending plan
+    // (trigger) orders for the symbol/direction and cancels them.
+    const cancelMatch = /^cancel\s+(\S+)\s+(long|short|l|s)\s*$/i.exec(text.trim());
+    if (cancelMatch) {
+      await this.handleCancelOrders(
+        cancelMatch[1],
+        cancelMatch[2].toUpperCase().startsWith("L") ? "LONG" : "SHORT",
+        chatId,
+        messageId
+      );
+      return;
     }
 
     // Close command: "Close {orderId}" — resolves the MEXC official order ID
