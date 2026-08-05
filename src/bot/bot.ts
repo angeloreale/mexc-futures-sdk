@@ -169,21 +169,14 @@ export class SignalBot {
     process.once("SIGINT", () => { void shutdown("SIGINT"); });
     process.once("SIGTERM", () => { void shutdown("SIGTERM"); });
 
-    // Emit an initial summary snapshot immediately on startup, before polling begins.
-    // forceFreshPending ensures the plan/stop (Trigger) order APIs are queried and
-    // the pending-orders cache is seeded with live data on first boot.
-    try {
-      await this.summaryMonitor.emitSummary(true);
-      this.logger.info("📊 Initial summary snapshot emitted");
-    } catch (error) {
-      this.logger.error(
-        "❌ Failed to emit initial summary:",
-        error instanceof Error ? error.message : error
-      );
-    }
+    // Launch Telegram IMMEDIATELY so the bot is listening before we do any
+    // slow API calls below. launch() runs long-polling and never resolves while
+    // active, so we fire-and-forget.
+    void this.telegram.launch().then(() => {
+      this.logger.info("✅ Telegram polling stopped");
+    });
 
     // Start periodic position summaries (always active for console/file logging).
-    // Starts before Telegram launch so polling runs even if Telegram is slow to connect.
     this.summaryMonitor.start();
     const summaryDest = this.config.summaryNotificationChannel
       ? `→ ${this.config.summaryNotificationChannel} `
@@ -201,11 +194,18 @@ export class SignalBot {
       );
     }
 
-    // Launch Telegram bot (long-polling). launch() never resolves while
-    // polling is active, so we fire-and-forget and log once polling begins.
-    void this.telegram.launch().then(() => {
-      this.logger.info("✅ Telegram polling stopped");
+    // Emit an initial summary snapshot in the background — Telegram is already
+    // listening, so any CHECK POSITIONS or signal received during the fetch will
+    // be queued and processed.
+    void this.summaryMonitor.emitSummary(true).then(() => {
+      this.logger.info("📊 Initial summary snapshot emitted");
+    }).catch((error) => {
+      this.logger.error(
+        "❌ Failed to emit initial summary:",
+        error instanceof Error ? error.message : error
+      );
     });
+
     this.logger.info("✅ Bot is running and listening for signals");
   }
 
