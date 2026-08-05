@@ -82,6 +82,17 @@ export function loadConfig(): BotConfig {
   const orderRateCapacity = parseInt(env.ORDER_RATE_CAPACITY || "3", 10);
   const orderRateIntervalMs = parseInt(env.ORDER_RATE_INTERVAL_MS || "200", 10);
 
+  // Signal resolver: channels where signals are monitored (TP/SL tracking)
+  // but NOT traded. Posts resolution updates when targets are hit.
+  const signalResolverChannels = (env.SIGNAL_RESOLVER_CHANNELS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const signalResolverIntervalSeconds = parseInt(
+    env.SIGNAL_RESOLVER_INTERVAL_SECONDS || "15",
+    10
+  );
+
   const config: BotConfig = {
     mexcApiKey,
     mexcSecretKey,
@@ -108,6 +119,8 @@ export function loadConfig(): BotConfig {
     summaryWindowHours,
     orderRateCapacity,
     orderRateIntervalMs,
+    signalResolverChannels,
+    signalResolverIntervalSeconds,
   };
 
   validate(config);
@@ -176,6 +189,14 @@ function validate(config: BotConfig): void {
   if (config.orderRateIntervalMs < 10) {
     throw new Error(
       `ORDER_RATE_INTERVAL_MS must be >= 10, got ${config.orderRateIntervalMs}`
+    );
+  }
+  if (
+    config.signalResolverChannels.length > 0 &&
+    config.signalResolverIntervalSeconds < 5
+  ) {
+    throw new Error(
+      `SIGNAL_RESOLVER_INTERVAL_SECONDS must be >= 5, got ${config.signalResolverIntervalSeconds}`
     );
   }
 }

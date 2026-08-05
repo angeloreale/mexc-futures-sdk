@@ -31,6 +31,8 @@ const defaultConfig: BotConfig = {
   summaryWindowHours: 4,
   orderRateCapacity: 3,
   orderRateIntervalMs: 200,
+  signalResolverChannels: [],
+  signalResolverIntervalSeconds: 15,
 };
 
 function makeContract(overrides?: Partial<ContractDetail>): ContractDetail {

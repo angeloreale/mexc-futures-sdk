@@ -161,4 +161,48 @@ export interface BotConfig {
 
   /** Milliseconds between API request refills — sustained rate ≈ 1000/orderRateIntervalMs req/s (default 200). */
   orderRateIntervalMs: number;
+
+  /** Channels that receive signal-resolution updates (TP/SL hit notifications). Signals from these channels are monitored but NOT traded. */
+  signalResolverChannels: string[];
+
+  /** How often (seconds) to poll MEXC tickers for signal resolution checks (min 5, default 15). */
+  signalResolverIntervalSeconds: number;
+}
+
+/**
+ * A signal being tracked by the SignalResolver for TP/SL monitoring.
+ */
+export interface TrackedSignal {
+  /** Unique ID (chatId_messageId_tpIndex for dedup) */
+  id: string;
+  /** Raw symbol from the signal text (e.g. "BTCUSDT") */
+  symbol: string;
+  /** Normalized MEXC contract symbol (e.g. "BTC_USDT") */
+  mexcSymbol: string;
+  /** BUY or SELL */
+  action: "BUY" | "SELL";
+  /** Entry price (resolved from ticker for market signals) */
+  entry: number;
+  /** Stop-loss price */
+  sl: number;
+  /** All take-profit levels to track */
+  tps: number[];
+  /** Telegram chat ID where the signal was posted */
+  chatId: string;
+  /** Telegram message ID of the signal */
+  messageId: number;
+  /** When the signal was first tracked (epoch ms) */
+  createdAt: number;
+}
+
+/**
+ * Emitted when a tracked signal's TP or SL is hit.
+ */
+export interface SignalResolutionEvent {
+  type: "tp" | "sl";
+  signal: TrackedSignal;
+  /** The price level that was hit */
+  hitPrice: number;
+  /** Which TP index was hit (0-based), only set for type=tp */
+  tpIndex?: number;
 }

@@ -2,12 +2,14 @@ import { Telegraf, Context } from "telegraf";
 import { message, channelPost } from "telegraf/filters";
 import { MexcFuturesSDK } from "../client";
 import { Logger } from "../utils/logger";
-import { BotConfig, TradeSignal, TradeRecord } from "./types";
+import { BotConfig, TradeSignal, TradeRecord, SignalResolutionEvent } from "./types";
 import { parseSignals, normalizeSymbol } from "./parser";
 import { ContractResolver } from "./resolver";
 import { calculatePositionSize } from "./sizer";
 import { TradeExecutor } from "./executor";
 import { BotState } from "./state";
+import { SignalResolver } from "./signalResolver";
+import { formatSignalResolutionMessage } from "./signalResolutionMessage";
 import {
   PositionClosureMonitor,
   AccountSnapshot,
@@ -50,6 +52,8 @@ export class SignalBot {
   /** Cache account equity for 10s to avoid rate limits on rapid signals. */
   private equityCache: { equity: number; ts: number } | null = null;
   private readonly EQUITY_CACHE_TTL_MS = 10_000;
+  /** Signal resolver: monitors resolver-channel signals for TP/SL hits (null when disabled). */
+  private signalResolver: SignalResolver | null = null;
 
   constructor(config: BotConfig) {
     this.config = config;
@@ -110,6 +114,18 @@ export class SignalBot {
       requestSpacingMs: config.orderRateIntervalMs,
     });
 
+    // Signal resolver: monitors resolver-channel signals for TP/SL hits
+    // without placing any MEXC orders (informational-only channels).
+    if (config.signalResolverChannels.length > 0) {
+      this.signalResolver = new SignalResolver({
+        client: this.mexcClient,
+        resolver: this.resolver,
+        logger: this.logger,
+        intervalSeconds: config.signalResolverIntervalSeconds,
+        onResolution: (event) => this.sendSignalResolution(event),
+      });
+    }
+
     // Initialize Telegram bot
     this.telegram = new Telegraf(config.telegramBotToken);
   }
@@ -134,6 +150,11 @@ export class SignalBot {
     this.logger.info(
       `   Channels: ${this.config.allowedChannels.join(", ")}`
     );
+    if (this.config.signalResolverChannels.length > 0) {
+      this.logger.info(
+        `   Resolver channels: ${this.config.signalResolverChannels.join(", ")} (info-only, no trading)`
+      );
+    }
 
     // Pre-warm contract cache
     try {
@@ -160,6 +181,7 @@ export class SignalBot {
     const shutdown = async (signal: string) => {
       this.logger.info(`\n🛑 Received ${signal} — shutting down...`);
       this.pnlMonitor?.stop();
+      this.signalResolver?.stop();
       await this.summaryMonitor.stop();
       this.telegram.stop(signal);
       this.logger.info("🛑 Shutdown complete — flushing logs...");
@@ -174,6 +196,9 @@ export class SignalBot {
     this.summaryMonitor.start();
     if (this.pnlMonitor) {
       this.pnlMonitor.start(/* externalFeed= */ true);
+    }
+    if (this.signalResolver) {
+      this.signalResolver.start();
     }
 
     // Fire the initial summary fetch in the background — it makes several
@@ -713,6 +738,11 @@ export class SignalBot {
     // Check if from allowed channel
     const chatUsername = msg.chat?.username;
     if (!this.isAllowedChannel(chatId, chatUsername)) {
+      // Not a trading channel — check if it's a resolver (info-only) channel
+      if (this.isResolverChannel(chatId, chatUsername)) {
+        await this.handleResolverMessage(text, chatId, messageId, msg.date);
+        return;
+      }
       return; // silently ignore
     }
 
@@ -976,6 +1006,83 @@ export class SignalBot {
         );
       }
     }
+  }
+
+  /**
+   * Handle a message from a resolver (info-only) channel: parse signals and
+   * feed them to the SignalResolver for TP/SL monitoring. No MEXC orders are
+   * placed for these signals.
+   */
+  private async handleResolverMessage(
+    text: string,
+    chatId: string,
+    messageId: number,
+    timestamp?: number
+  ): Promise<void> {
+    if (!this.signalResolver) return;
+
+    const signals = parseSignals(text, messageId, chatId, timestamp);
+    if (signals.length === 0) return;
+
+    // Idempotency check (reuse the same state file as trading signals)
+    if (this.state.isProcessed(chatId, messageId)) {
+      this.logger.debug(`🔍 Resolver: message ${chatId}#${messageId} already processed`);
+      return;
+    }
+    this.state.markProcessed(chatId, messageId);
+
+    this.logger.info(
+      `🔍 Resolver: ${signals.length} signal(s) from ${chatId}#${messageId}`
+    );
+
+    for (const signal of signals) {
+      this.logger.info(
+        `   ${signal.action} ${signal.rawSymbol}${signal.orderType === "trigger" ? `@${signal.entry}` : ""} SL ${signal.sl} TP ${signal.tp.join(",") || "(none)"}`
+      );
+      await this.signalResolver.track(signal);
+    }
+  }
+
+  /**
+   * Send a TP/SL resolution notification to the resolver channel where the
+   * original signal was posted.
+   */
+  private async sendSignalResolution(event: SignalResolutionEvent): Promise<void> {
+    const text = formatSignalResolutionMessage(event);
+    try {
+      await this.telegram.telegram.sendMessage(
+        event.signal.chatId,
+        text,
+        { parse_mode: "HTML" }
+      );
+      this.logger.info(
+        `🔍 Resolver: resolution sent to ${event.signal.chatId} for ${event.signal.mexcSymbol}`
+      );
+    } catch (error) {
+      this.logger.error(
+        `🔍 Resolver: failed to send resolution to ${event.signal.chatId}:`,
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+
+  /**
+   * Check if a chat is a resolver (info-only) channel.
+   */
+  private isResolverChannel(chatId: string, username?: string): boolean {
+    if (!this.signalResolver) return false;
+    if (this.config.signalResolverChannels.includes(chatId)) return true;
+    if (
+      username &&
+      this.config.signalResolverChannels.some(
+        (ch) =>
+          ch === `@${username}` ||
+          ch.toLowerCase() === username.toLowerCase()
+      )
+    ) {
+      return true;
+    }
+    return false;
   }
 
   /**
