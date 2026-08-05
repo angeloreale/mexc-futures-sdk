@@ -103,7 +103,7 @@ export class SignalBot {
         baseCurrency: config.baseCurrency,
         intervalSeconds: config.positionMonitorIntervalSeconds,
         onClose: (info, account) => {
-          this.slTpStore.remove(info.symbol);
+          this.slTpStore.removeSymbol(info.symbol);
           this.sendPositionClosedNotification(info, account);
         },
       });
@@ -566,10 +566,9 @@ export class SignalBot {
     const nearestTp =
       t.side === 1 ? Math.min(...tps) : Math.max(...tps);
 
-    this.slTpStore.set(t.mexcSymbol, {
+    this.slTpStore.set(t.mexcSymbol, t.side === 1 ? 1 : 2, {
       sl: t.stopLossPrice,
       tp: nearestTp,
-      positionType: t.side === 1 ? 1 : 2,
       setAt: Date.now(),
       orderId: record.orderId,
     });
@@ -841,7 +840,7 @@ export class SignalBot {
 
     if (result.success) {
       if (!isPartial) {
-        this.slTpStore.remove(symbol);
+        this.slTpStore.removeSymbol(symbol);
       }
       await this.sendCloseResult({
         status: this.config.dryRun ? "dry-run" : "success",
@@ -918,8 +917,8 @@ export class SignalBot {
       return;
     }
 
-    // 4. Get stored SL/TP for this symbol (for mirroring distance).
-    const slTp = this.slTpStore.get(symbol);
+    // 4. Get stored SL/TP for this position direction (for mirroring distance).
+    const slTp = this.slTpStore.get(symbol, positionType);
     let newSl: number;
     let newTp: number;
 
@@ -980,7 +979,7 @@ export class SignalBot {
       });
       return;
     }
-    this.slTpStore.remove(symbol);
+    this.slTpStore.removeSymbol(symbol);
 
     // Dry-run: stop after the close step.
     if (this.config.dryRun) {
@@ -1128,8 +1127,8 @@ export class SignalBot {
       return;
     }
 
-    // 4. Get stored SL/TP — required for consistent risk sizing.
-    const slTp = this.slTpStore.get(symbol);
+    // 4. Get stored SL/TP for this position direction — required for consistent risk sizing.
+    const slTp = this.slTpStore.get(symbol, positionType);
     if (!slTp || slTp.sl <= 0 || slTp.tp <= 0) {
       await this.sendAddToResult({
         status: "error", queriedId: orderId, symbol,

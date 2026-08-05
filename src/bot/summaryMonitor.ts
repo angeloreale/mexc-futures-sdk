@@ -51,6 +51,14 @@ export interface OpenPositionSummary {
   minPnl: number;
   /** Initial margin of the position */
   margin: number;
+  /** Remaining volume (contracts). */
+  holdVol: number;
+  /** Estimated PNL if the position reaches its TP target (quote currency). */
+  estTpPnl?: number;
+  /** Estimated PNL if the position hits its SL (quote currency, negative). */
+  estSlPnl?: number;
+  /** Fraction (0..1+) of the TP-target PNL currently reached via currentPnl. */
+  tpProgress?: number;
   /** Fill order ID (regular MEXC order ID) — use this for CLOSE/REVERSE/ADD TO commands. */
   fillOrderId?: string;
 }
@@ -190,6 +198,8 @@ export class PositionSummaryMonitor {
   private prevPnl = new Map<string, number>();
   private pendingOrdersCache: { orders: PendingOrderSummary[]; ts: number } | null = null;
   private readonly PENDING_CACHE_TTL_MS = 30_000; // cache pending orders for 30s to avoid rate limits
+  /** Cached contract size (price multiplier) per symbol — used to convert between unrealized PNL and price. */
+  private contractSizes = new Map<string, number>();
 
   constructor(opts: PositionSummaryMonitorOptions) {
     this.client = opts.client;
@@ -351,7 +361,8 @@ export class PositionSummaryMonitor {
 
       // Evaluate >50%-toward-SL/TP alerts for positions with known targets.
       this.slTpStore.pruneStale(this.slTpRetentionMs);
-      this.checkAlerts(active);
+      await this.ensureContractSizes(active);
+      await this.checkAlerts(active);
     } catch (error) {
       this.logger.warn(
         "⚠️ Position summary sampling failed:",
@@ -415,6 +426,7 @@ export class PositionSummaryMonitor {
           maxPnl,
           minPnl,
           margin: p.oim || p.im || 0,
+          holdVol: p.holdVol,
         };
       });
 
@@ -433,6 +445,13 @@ export class PositionSummaryMonitor {
       // planorder/stoporder lists as fallbacks, merges and dedupes. Each
       // source fails independently and degrades gracefully.
       const pendingOrders = await this.fetchPendingOrders(forceFreshPending);
+
+      // Estimated TP/SL P&L per position (requires known SL/TP levels).
+      await this.ensureContractSizes(open);
+      const slTpLookup = this.buildSlTpLookupFrom(pendingOrders);
+      for (const pos of openPositions) {
+        this.attachEstimatedPnl(pos, slTpLookup);
+      }
 
       // Space before the next API call.
       await this.spaceRequest();
@@ -513,9 +532,15 @@ export class PositionSummaryMonitor {
       for (const p of summary.openPositions) {
         const dir = p.positionType === 1 ? "LONG" : "SHORT";
         const icon = p.currentPnl >= 0 ? "🟢" : "🔴";
+        const estLine =
+          p.estTpPnl !== undefined && p.estSlPnl !== undefined
+            ? ` · Est TP ${fmtS(p.estTpPnl)} / SL ${fmtS(p.estSlPnl)} ${cur}` +
+              `${p.tpProgress !== undefined ? ` (${(p.tpProgress * 100).toFixed(0)}% of TP)` : ""}`
+            : "";
         this.logger.info(
           `  ${icon} ${p.symbol} ${dir} ${p.leverage}x · Entry ${fmtN(p.openAvgPrice)} · ` +
             `PNL ${fmtS(p.currentPnl)} ${cur} · max ${fmtS(p.maxPnl)} / min ${fmtS(p.minPnl)}` +
+            estLine +
             ` · 🆔 ${p.positionId}`
         );
       }
@@ -855,9 +880,10 @@ export class PositionSummaryMonitor {
     const map = new Map<string, string>();
 
     // 1. Check slTpStore first (covers market orders + recently-placed trigger orders).
-    for (const [symbol, entry] of this.slTpStore.entries()) {
+    for (const [, entry] of this.slTpStore.entries()) {
       if (!entry.orderId || entry.orderId === "DRY_RUN" || entry.orderId === "DISABLED") continue;
-      const key = `${symbol}:${entry.positionType}`;
+      if (!entry.symbol) continue;
+      const key = `${entry.symbol}:${entry.positionType}`;
       if (!map.has(key)) {
         map.set(key, entry.orderId);
       }
@@ -898,13 +924,28 @@ export class PositionSummaryMonitor {
    * price has moved more than 50% of the way toward the stop-loss or
    * take-profit level. Fires at most once per target per position lifetime.
    */
-  private checkAlerts(active: Position[]): void {
+  private async checkAlerts(active: Position[]): Promise<void> {
+    // Prefer the in-memory slTpStore; only fetch pending TP/SL stop orders to
+    // fill gaps (e.g. after a restart or for manually-opened positions).
+    let lookup = this.buildSlTpLookupFrom([]);
+    const missing = active.some(
+      (p) => !lookup.has(`${p.symbol}:${p.positionType}`)
+    );
+    if (missing) {
+      try {
+        const pending = await this.fetchPendingOrders();
+        lookup = this.buildSlTpLookupFrom(pending);
+      } catch {
+        // keep store-only lookup
+      }
+    }
+
     const seen = new Set<string>();
     for (const p of active) {
       const id = String(p.positionId);
       seen.add(id);
-      const entry = this.slTpStore.get(p.symbol);
-      if (!entry || entry.positionType !== p.positionType) continue;
+      const entry = lookup.get(`${p.symbol}:${p.positionType}`);
+      if (!entry) continue;
 
       const alert = this.evaluateAlert(p, entry);
       if (!alert) continue;
@@ -1002,20 +1043,131 @@ export class PositionSummaryMonitor {
   }
 
   /**
-   * Derive approximate current market price from unrealized PNL and the
-   * position's remaining volume + average entry. Avoids an extra ticker API
-   * call per position per poll.
+   * Derive approximate current market price from unrealized PNL, the position's
+   * remaining volume, average entry AND the contract size (price multiplier).
+   * Avoids an extra ticker API call per position per poll.
    *
-   *   LONG:  currentPrice = openAvgPrice + unRealizedPnl / holdVol
-   *   SHORT: currentPrice = openAvgPrice - unRealizedPnl / holdVol
+   *   LONG:  currentPrice = openAvgPrice + unRealizedPnl / (holdVol * contractSize)
+   *   SHORT: currentPrice = openAvgPrice - unRealizedPnl / (holdVol * contractSize)
+   *
+   * NOTE: contract size matters — e.g. ATOM_USDT has contractSize 0.1 and
+   * BTC_USDT 0.0001. Without it the derived price (and therefore alert
+   * progress) was wrong by a factor of 1/contractSize, which is why >50%
+   * alerts never fired for most contracts.
    */
   private deriveCurrentPrice(p: Position): number {
     const pnl = toFiniteNumber(p.unRealizedPnl);
     const vol = p.holdVol;
     if (!Number.isFinite(pnl) || !vol || vol <= 0) return NaN;
+    const cs = this.contractSizes.get(p.symbol) ?? 1;
     return p.positionType === 1
-      ? p.openAvgPrice + pnl / vol
-      : p.openAvgPrice - pnl / vol;
+      ? p.openAvgPrice + pnl / (vol * cs)
+      : p.openAvgPrice - pnl / (vol * cs);
+  }
+
+  /**
+   * Ensure the contract size (price multiplier) is cached for every open
+   * symbol. Needed to convert unrealized PNL ↔ price. Values are cached
+   * indefinitely (contract metadata is stable); a failed fetch defaults to 1
+   * (assumes a 1:1 PNL↔price relationship) so the monitor never blocks on it.
+   */
+  private async ensureContractSizes(positions: Position[]): Promise<void> {
+    const missing = new Set<string>();
+    for (const p of positions) {
+      if (p && p.symbol && !this.contractSizes.has(p.symbol)) {
+        missing.add(p.symbol);
+      }
+    }
+    if (missing.size === 0) return;
+    for (const symbol of missing) {
+      try {
+        await this.spaceRequest();
+        const res: any = await this.client.getContractDetail(symbol);
+        const data = Array.isArray(res?.data)
+          ? res.data.find((x: any) => x && x.symbol === symbol)
+          : res?.data;
+        const cs = Number(data?.contractSize);
+        this.contractSizes.set(symbol, Number.isFinite(cs) && cs > 0 ? cs : 1);
+      } catch {
+        this.contractSizes.set(symbol, 1);
+      }
+    }
+  }
+
+  /**
+   * Build a merged SL/TP lookup keyed by `${symbol}:${positionType}`.
+   * Prefers the in-memory slTpStore (bot-placed orders) and fills any gaps
+   * from the pending TP/SL stop orders (which survive restarts and cover
+   * manually-opened positions).
+   */
+  private buildSlTpLookupFrom(pending: PendingOrderSummary[]): Map<string, SlTpEntry> {
+    const map = new Map<string, SlTpEntry>();
+    for (const [, entry] of this.slTpStore.entries()) {
+      if (entry.symbol) {
+        map.set(`${entry.symbol}:${entry.positionType}`, entry);
+      }
+    }
+    for (const o of pending) {
+      if (o.kind !== "TP_SL") continue;
+      const key = `${o.symbol}:${o.positionType}`;
+      if (map.has(key)) continue;
+      if (!Number.isFinite(o.stopLossPrice) && !Number.isFinite(o.takeProfitPrice)) continue;
+      map.set(key, {
+        symbol: o.symbol,
+        sl: o.stopLossPrice,
+        tp: o.takeProfitPrice,
+        positionType: o.positionType,
+        setAt: Date.now(),
+      });
+    }
+    return map;
+  }
+
+  /**
+   * Attach estimated TP/SL P&L (and the current % of the TP target reached) to
+   * an open position summary, using the known SL/TP levels and contract size.
+   * P&L is linear in price, so:
+   *   LONG:  estPnl(target) = (target - entry) * holdVol * contractSize
+   *   SHORT: estPnl(target) = (entry - target) * holdVol * contractSize
+   * `tpProgress` = currentPnl / estTpPnl (1.0 = target reached, negative = losing).
+   */
+  private attachEstimatedPnl(
+    pos: OpenPositionSummary,
+    lookup: Map<string, SlTpEntry>
+  ): void {
+    const entry = lookup.get(`${pos.symbol}:${pos.positionType}`);
+    if (!entry) return;
+    const avgEntry = pos.openAvgPrice;
+    const vol = pos.holdVol;
+    const cs = this.contractSizes.get(pos.symbol) ?? 1;
+    if (
+      !Number.isFinite(avgEntry) || avgEntry <= 0 ||
+      !Number.isFinite(vol) || vol <= 0 ||
+      !Number.isFinite(cs) || cs <= 0
+    ) {
+      return;
+    }
+
+    const isLong = pos.positionType === 1;
+
+    const tp = Number.isFinite(entry.tp) ? entry.tp : NaN;
+    if (Number.isFinite(tp) && tp > 0) {
+      const diffTp = isLong ? tp - avgEntry : avgEntry - tp;
+      const estTpPnl = diffTp * vol * cs;
+      if (Number.isFinite(estTpPnl) && Math.abs(estTpPnl) > 1e-12) {
+        pos.estTpPnl = estTpPnl;
+        pos.tpProgress = pos.currentPnl / estTpPnl;
+      }
+    }
+
+    const sl = Number.isFinite(entry.sl) ? entry.sl : NaN;
+    if (Number.isFinite(sl) && sl > 0) {
+      const diffSl = isLong ? sl - avgEntry : avgEntry - sl;
+      const estSlPnl = diffSl * vol * cs;
+      if (Number.isFinite(estSlPnl) && Math.abs(estSlPnl) > 1e-12) {
+        pos.estSlPnl = estSlPnl;
+      }
+    }
   }
 
 }

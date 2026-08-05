@@ -18,6 +18,7 @@ function makeSummary(overrides?: Partial<PositionSummary>): PositionSummary {
         maxPnl: 210.1,
         minPnl: -5.3,
         margin: 3450,
+        holdVol: 1,
       },
       {
         positionId: "2",
@@ -30,6 +31,7 @@ function makeSummary(overrides?: Partial<PositionSummary>): PositionSummary {
         maxPnl: 40.5,
         minPnl: -15.2,
         margin: 700,
+        holdVol: 1,
       },
     ],
     account: {

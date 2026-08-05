@@ -59,6 +59,16 @@ export function formatPositionSummaryMessage(summary: PositionSummary): string {
       lines.push(`Entry: ${fmt(p.openAvgPrice)}`);
       lines.push(`PNL: <b>${fmtSigned(p.currentPnl)} ${cur}</b>`);
       lines.push(`   max ${fmtSigned(p.maxPnl)} / min ${fmtSigned(p.minPnl)} ${cur}`);
+      // Total estimated P&L at TP/SL and how much of the TP target is reached.
+      if (p.estTpPnl !== undefined && p.estSlPnl !== undefined) {
+        const pct = p.tpProgress !== undefined ? p.tpProgress * 100 : NaN;
+        const pctLine = Number.isFinite(pct)
+          ? ` · <b>${fmtSigned(pct, 0)}%</b> of TP`
+          : "";
+        lines.push(
+          `🎯 Est TP <b>${fmtSigned(p.estTpPnl)}</b> / SL <b>${fmtSigned(p.estSlPnl)}</b> ${cur}${pctLine}`
+        );
+      }
       // The position ID is the single identifier that works with the CLOSE
       // handler: it is always present on the open-positions API and uniquely
       // identifies the exact LONG/SHORT position (hedge mode can hold both on

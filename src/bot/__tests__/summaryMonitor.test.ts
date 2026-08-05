@@ -84,6 +84,9 @@ describe("PositionSummaryMonitor", () => {
       getAccountAsset: jest.fn(),
       getPlanOrders: jest.fn().mockResolvedValue({ data: [] }),
       getStopOrders: jest.fn().mockResolvedValue({ data: [] }),
+      getContractDetail: jest
+        .fn()
+        .mockImplementation(async (symbol: string) => ({ data: [{ symbol, contractSize: 1 }] })),
     };
   });
 
@@ -280,6 +283,54 @@ describe("PositionSummaryMonitor", () => {
     expect(a.target).toBe("SL");
     expect(a.symbol).toBe("ETH_USDT");
     expect(a.progress).toBeCloseTo(0.6, 2);
+  });
+
+  it("uses contract size when deriving price for alerts (ATOM cs=0.1)", async () => {
+    // ATOM_USDT contractSize = 0.1. Entry 1.35, holdVol 244, TP 1.37.
+    // Real price 1.361 → progress = (1.361-1.35)/(1.37-1.35) = 0.55 → alert.
+    // PNL = (1.361-1.35) * 244 * 0.1 = 0.2684.
+    // (Without the contract-size fix, derived price = 1.35 + 0.2684/244 ≈ 1.351
+    //  → progress 0.05 → NO alert.)
+    store.set("ATOM_USDT", { sl: 1.33, tp: 1.37, positionType: 1, setAt: Date.now() });
+    client.getContractDetail = jest
+      .fn()
+      .mockResolvedValue({ data: [{ symbol: "ATOM_USDT", contractSize: 0.1 }] });
+    client.getOpenPositions.mockResolvedValue({
+      data: [makePosition({ symbol: "ATOM_USDT", positionId: 1, openAvgPrice: 1.35, holdVol: 244, unRealizedPnl: 0.2684, positionType: 1 })],
+    });
+
+    const monitor = makeMonitor(client, store, onSummary, onAlert);
+    await monitor.sample();
+
+    expect(onAlert).toHaveBeenCalledTimes(1);
+    const a: PositionAlert = onAlert.mock.calls[0][0];
+    expect(a.target).toBe("TP");
+    expect(a.symbol).toBe("ATOM_USDT");
+    expect(a.progress).toBeCloseTo(0.55, 2);
+  });
+
+  it("attaches estimated TP/SL P&L and % toward TP to the summary", async () => {
+    // ATOM LONG: entry 1.35, holdVol 244, cs 0.1, TP 1.37, SL 1.33.
+    // estTpPnl = (1.37-1.35)*244*0.1 = 0.488; estSlPnl = (1.33-1.35)*244*0.1 = -0.488
+    // PNL 0.2684 → tpProgress = 0.2684/0.488 ≈ 0.55
+    store.set("ATOM_USDT", 1, { sl: 1.33, tp: 1.37, setAt: Date.now() });
+    client.getContractDetail = jest
+      .fn()
+      .mockResolvedValue({ data: [{ symbol: "ATOM_USDT", contractSize: 0.1 }] });
+    client.getOpenPositions.mockResolvedValue({
+      data: [makePosition({ symbol: "ATOM_USDT", positionId: 1, openAvgPrice: 1.35, holdVol: 244, unRealizedPnl: 0.2684, positionType: 1 })],
+    });
+    client.getAccountAsset.mockResolvedValue({
+      data: { availableBalance: 1000, equity: 5000 },
+    });
+
+    const monitor = makeMonitor(client, store, onSummary, onAlert);
+    await monitor.emitSummary();
+
+    const pos = onSummary.mock.calls[0][0].openPositions[0];
+    expect(pos.estTpPnl).toBeCloseTo(0.488, 6);
+    expect(pos.estSlPnl).toBeCloseTo(-0.488, 6);
+    expect(pos.tpProgress).toBeCloseTo(0.55, 2);
   });
 
   // ── SlTpStore prune test ────────────────────────────────────────────
