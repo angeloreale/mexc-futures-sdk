@@ -564,11 +564,15 @@ export class SignalBot {
   /**
    * Close a position immediately by its MEXC official order ID.
    * Resolves via the MEXC `getOrder` API (no local order-ID storage).
+   *
+   * @param orderId     MEXC order ID to look up and close.
+   * @param closePercent Optional partial-close percentage (1–100, default 100 = full close).
    */
   private async handleClosePosition(
     orderId: string,
     chatId: string,
-    messageId: number
+    messageId: number,
+    closePercent?: number
   ): Promise<void> {
     if (this.state.isProcessed(chatId, messageId)) {
       this.logger.debug(`⏭️ Close ${orderId} already processed`);
@@ -654,27 +658,40 @@ export class SignalBot {
       // fall through with 0; MEXC market orders accept price=0
     }
 
-    // 4. Close.
+    // 4. Validate and normalise close percent.
+    const pct = closePercent !== undefined ? Math.min(100, Math.max(1, closePercent)) : 100;
+    const isPartial = pct < 100;
+
+    this.logger.info(
+      `🔚 Closing ${symbol} ${positionType === 1 ? "LONG" : "SHORT"} ` +
+      `${isPartial ? `${pct}% (partial)` : "100% (full)"} — holdVol=${position.holdVol}`
+    );
+
+    // 5. Close.
     const result = await this.executor.closePosition(
       symbol,
       position,
       currentPrice,
       positionType,
       position.openType,
-      position.leverage
+      position.leverage,
+      pct
     );
 
     if (result.success) {
-      this.slTpStore.remove(symbol);
+      if (!isPartial) {
+        this.slTpStore.remove(symbol);
+      }
       await this.sendCloseResult({
         status: this.config.dryRun ? "dry-run" : "success",
         queriedId: orderId,
         symbol,
         positionType,
         leverage: position.leverage,
-        volume: position.holdVol,
+        volume: result.volume,
         price: currentPrice || undefined,
         orderId: result.orderId,
+        closePercent: isPartial ? pct : undefined,
       });
     } else {
       await this.sendCloseResult({
@@ -759,11 +776,13 @@ export class SignalBot {
       return;
     }
 
-    // Close command: "Close {orderId}" — resolves the MEXC official order ID
-    // via the getOrder API, finds the matching open position, and closes it.
-    const closeMatch = /^close\s+(\S+)\s*$/i.exec(text.trim());
+    // Close command: "Close {orderId} [percent%]" — resolves the MEXC official
+    // order ID via the getOrder API, finds the matching open position, and
+    // closes it (fully or partially). Examples: CLOSE abc123, CLOSE abc123 30%
+    const closeMatch = /^close\s+(\S+)(?:\s+(\d+(?:\.\d+)?)\s*%?)?\s*$/i.exec(text.trim());
     if (closeMatch) {
-      await this.handleClosePosition(closeMatch[1], chatId, messageId);
+      const closePercent = closeMatch[2] ? parseFloat(closeMatch[2]) : undefined;
+      await this.handleClosePosition(closeMatch[1], chatId, messageId, closePercent);
       return;
     }
 

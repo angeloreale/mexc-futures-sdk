@@ -78,7 +78,7 @@ export class TradeExecutor {
   }
 
   /**
-   * Close an open position immediately with a market order.
+   * Close an open position immediately (or partially) with a market order.
    *
    * @param symbol   MEXC contract symbol (e.g. "BTC_USDT")
    * @param position The open-position record, providing holdVol and positionId
@@ -86,6 +86,7 @@ export class TradeExecutor {
    * @param positionType 1=long, 2=short
    * @param openType 1=isolated, 2=cross
    * @param leverage Leverage used (optional, MEXC may require for isolated)
+   * @param closePercent Percentage of the position to close (1–100, default 100 = full close)
    */
   async closePosition(
     symbol: string,
@@ -93,13 +94,23 @@ export class TradeExecutor {
     currentPrice: number,
     positionType: 1 | 2,
     openType: 1 | 2,
-    leverage: number
-  ): Promise<{ success: boolean; orderId?: string; error?: string }> {
+    leverage: number,
+    closePercent: number = 100
+  ): Promise<{ success: boolean; orderId?: string; volume?: number; error?: string }> {
+    // Calculate the volume to close, respecting the percentage.
+    // Round down to a reasonable precision (8 decimals should be plenty).
+    const rawVol = position.holdVol * (closePercent / 100);
+    const closeVol = Math.floor(rawVol * 1e8) / 1e8;
+
+    if (closeVol <= 0) {
+      return { success: false, error: `Computed close volume is zero (${closePercent}% of ${position.holdVol})` };
+    }
+
     if (this.config.dryRun) {
       this.logger.info(
-        `🧪 [DRY RUN] Would close ${symbol} (vol=${position.holdVol}, price=${currentPrice})`
+        `🧪 [DRY RUN] Would close ${symbol} ${closePercent}% (vol=${closeVol}, price=${currentPrice})`
       );
-      return { success: true, orderId: "DRY_RUN" };
+      return { success: true, orderId: "DRY_RUN", volume: closeVol };
     }
 
     if (!this.config.tradingEnabled) {
@@ -112,7 +123,7 @@ export class TradeExecutor {
     const params: SubmitOrderRequest = {
       symbol,
       price: currentPrice || 0,
-      vol: position.holdVol,
+      vol: closeVol,
       side,
       type: 5, // market
       openType,
@@ -123,13 +134,13 @@ export class TradeExecutor {
 
     try {
       this.logger.info(
-        `🔚 Closing position: ${symbol} ${positionType === 1 ? "LONG" : "SHORT"} vol=${position.holdVol} side=${side}`
+        `🔚 Closing position: ${symbol} ${positionType === 1 ? "LONG" : "SHORT"} vol=${closeVol} side=${side}`
       );
       const response = await this.client.submitOrder(params);
       if (response.success) {
         const oid = String(response.data ?? "");
         this.logger.info(`✅ Close order placed: ${oid} for ${symbol}`);
-        return { success: true, orderId: oid };
+        return { success: true, orderId: oid, volume: closeVol };
       }
       return {
         success: false,

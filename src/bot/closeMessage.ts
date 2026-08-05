@@ -19,6 +19,8 @@ export interface PositionCloseResult {
   orderId?: string;
   /** Error description. */
   error?: string;
+  /** Percentage of position closed (only set for partial closes, e.g. 30 for 30%). */
+  closePercent?: number;
 }
 
 /**
@@ -66,7 +68,7 @@ export function formatPositionCloseMessage(
         `🧪 <b>[DRY RUN] Would close</b>`,
         ``,
         `🪙 <b>${res.symbol ?? "?"}</b> · ${res.positionType === 1 ? "LONG" : "SHORT"} · ${res.leverage ?? "?"}x`,
-        `Vol: ${fmt((res.volume ?? 0) as number)} @ ${fmt((res.price ?? 0) as number)}`,
+        `Vol: ${fmt((res.volume ?? 0) as number)} @ ${fmt((res.price ?? 0) as number)}${res.closePercent ? ` (${res.closePercent}% partial)` : ""}`,
         `Order: <code>${res.queriedId}</code>`,
       ].join("\n");
 
@@ -79,8 +81,9 @@ export function formatPositionCloseMessage(
 
     case "success": {
       const dir = res.positionType === 1 ? "LONG" : "SHORT";
+      const partialLabel = res.closePercent ? ` (${res.closePercent}% PARTIAL)` : "";
       return [
-        `✅ <b>POSITION CLOSED</b>`,
+        `✅ <b>POSITION CLOSED${partialLabel}</b>`,
         ``,
         `🪙 <b>${res.symbol ?? "?"}</b> · ${dir} · ${res.leverage ?? "?"}x`,
         `Vol: ${fmt((res.volume ?? 0) as number)} @ ${fmt((res.price ?? 0) as number)}`,
