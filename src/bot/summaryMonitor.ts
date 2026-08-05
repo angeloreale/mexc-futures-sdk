@@ -516,7 +516,7 @@ export class PositionSummaryMonitor {
         this.logger.info(
           `  ${icon} ${p.symbol} ${dir} ${p.leverage}x · Entry ${fmtN(p.openAvgPrice)} · ` +
             `PNL ${fmtS(p.currentPnl)} ${cur} · max ${fmtS(p.maxPnl)} / min ${fmtS(p.minPnl)}` +
-            `${p.fillOrderId ? ` · 🆔 ${p.fillOrderId}` : ""}`
+            ` · 🆔 ${p.positionId} · CLOSE ${p.positionId}`
         );
       }
     }

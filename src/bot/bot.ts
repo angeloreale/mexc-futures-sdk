@@ -579,11 +579,14 @@ export class SignalBot {
   }
 
   /**
-   * True when the message is the on-demand summary command
-   * "CHECK POSITIONS" (case-insensitive, whitespace-tolerant).
+   * True when the message is the on-demand summary command:
+   *   "CHECK POSITIONS" (case-insensitive, whitespace-tolerant) or the
+   *   shortcut "@" — both emit the position summary immediately when sent
+   *   to the summary channel.
    */
   private isCheckPositionsCommand(text: string): boolean {
-    return text.trim().toUpperCase() === "CHECK POSITIONS";
+    const t = text.trim();
+    return t.toUpperCase() === "CHECK POSITIONS" || t === "@";
   }
 
   /**
@@ -610,7 +613,7 @@ export class SignalBot {
 
     this.state.markProcessed(chatId, messageId);
     this.logger.info(
-      "📊 CHECK POSITIONS received — emitting summary immediately"
+      "📊 Summary requested — emitting summary immediately"
     );
     // Force a fresh fetch of pending (plan/trigger) orders — the summary
     // should reflect live Trigger-order state, not the 30s cache.
@@ -702,10 +705,68 @@ export class SignalBot {
   }
 
   /**
-   * Close a position immediately by its MEXC official order ID.
+   * Resolve a user-supplied ID to an open position.
+   *
+   * Priority:
+   *   1. Direct `positionId` match against open positions — this is the ID the
+   *      summary now shows as the primary CLOSE identifier. It is always
+   *      present on the open-positions API and carries the authoritative
+   *      `positionType`, so closing by it never hits MEXC's "wrong direction"
+   *      error (critical in hedge mode, where a symbol can hold both a LONG
+   *      and a SHORT position simultaneously).
+   *   2. Legacy order-ID resolution (fill order ID via getOrder, or plan/trigger
+   *      order ID via the plan-order list) through resolveOrderIdentity, then
+   *      matched by symbol + positionType.
+   *
+   * Returns `{ position, symbol }` on success, or null when the ID is unknown.
+   * Throws when the open-positions fetch itself fails (caller surfaces the error).
+   */
+  private async resolveOpenPosition(
+    orderId: string
+  ): Promise<{ position: Position; symbol: string } | null> {
+    let positions: Position[] = [];
+    try {
+      const res = await this.mexcClient.getOpenPositions();
+      positions = Array.isArray(res.data) ? res.data : [];
+    } catch (error) {
+      this.logger.error(
+        "❌ Failed to fetch open positions:",
+        error instanceof Error ? error.message : error
+      );
+      throw error;
+    }
+
+    // 1. Direct positionId match — the ID shown in the summary.
+    const byPositionId = positions.find(
+      (p) => String(p.positionId) === orderId && p.state !== 3 && p.holdVol > 0
+    );
+    if (byPositionId) {
+      this.logger.info(
+        `🔍 Resolved ${orderId} via positionId → ${byPositionId.symbol} ${byPositionId.positionType === 1 ? "LONG" : "SHORT"}`
+      );
+      return { position: byPositionId, symbol: byPositionId.symbol };
+    }
+
+    // 2. Order-ID resolution (fill order ID / plan order ID).
+    const identity = await this.resolveOrderIdentity(orderId);
+    if (!identity) return null;
+
+    const position = positions.find(
+      (p) =>
+        p.symbol === identity.symbol &&
+        p.positionType === identity.positionType &&
+        p.state !== 3 &&
+        p.holdVol > 0
+    );
+    if (!position) return null;
+    return { position, symbol: identity.symbol };
+  }
+
+  /**
+   * Close a position immediately by its MEXC official order ID or position ID.
    * Resolves via the MEXC `getOrder` API (no local order-ID storage).
    *
-   * @param orderId     MEXC order ID to look up and close.
+   * @param orderId     MEXC position ID or order ID to look up and close.
    * @param closePercent Optional partial-close percentage (1–100, default 100 = full close).
    */
   private async handleClosePosition(
@@ -722,49 +783,26 @@ export class SignalBot {
 
     this.logger.info(`🔚 Close requested for order ${orderId}`);
 
-    // 1. Resolve order identity — tries getOrder first, then plan orders.
-    const identity = await this.resolveOrderIdentity(orderId);
-    if (!identity) {
-      this.logger.error(`❌ Could not resolve order ${orderId}`);
-      await this.sendCloseResult({ status: "unknown", queriedId: orderId });
-      return;
-    }
-    const { symbol, positionType } = identity;
-
-    // 2. Find the matching open position.
-    let positions: Position[] = [];
+    // 1. Resolve the target position — tries the summary positionId first
+    //    (most reliable), then fill/plan order IDs via resolveOrderIdentity.
+    let resolved: { position: Position; symbol: string } | null;
     try {
-      const res = await this.mexcClient.getOpenPositions();
-      positions = Array.isArray(res.data) ? res.data : [];
+      resolved = await this.resolveOpenPosition(orderId);
     } catch (error) {
-      this.logger.error(
-        "❌ Failed to fetch open positions for close:",
-        error instanceof Error ? error.message : error
-      );
       await this.sendCloseResult({
         status: "error",
         queriedId: orderId,
-        symbol,
         error: error instanceof Error ? error.message : String(error),
       });
       return;
     }
-
-    const position = positions.find(
-      (p) =>
-        p.symbol === symbol &&
-        p.positionType === positionType &&
-        p.state !== 3 &&
-        p.holdVol > 0
-    );
-    if (!position) {
-      await this.sendCloseResult({
-        status: "not-open",
-        queriedId: orderId,
-        symbol,
-      });
+    if (!resolved) {
+      this.logger.error(`❌ Could not resolve order ${orderId}`);
+      await this.sendCloseResult({ status: "unknown", queriedId: orderId });
       return;
     }
+    const { symbol, position } = resolved;
+    const positionType = position.positionType;
 
     // 3. Resolve current price for market close.
     let currentPrice = 0;
@@ -845,37 +883,26 @@ export class SignalBot {
 
     this.logger.info(`🔄 Reverse requested for order ${orderId}`);
 
-    // 1. Resolve order identity.
-    const identity = await this.resolveOrderIdentity(orderId);
-    if (!identity) {
-      this.logger.error(`❌ Could not resolve order ${orderId} for reverse`);
-      await this.sendReverseResult({ status: "unknown", queriedId: orderId });
-      return;
-    }
-    const { symbol, positionType } = identity;
-    const originalDir = positionType === 1 ? "LONG" : "SHORT";
-
-    // 2. Find the matching open position.
-    let positions: Position[] = [];
+    // 1. Resolve the target position — positionId first, then order IDs.
+    let resolved: { position: Position; symbol: string } | null;
     try {
-      const res = await this.mexcClient.getOpenPositions();
-      positions = Array.isArray(res.data) ? res.data : [];
+      resolved = await this.resolveOpenPosition(orderId);
     } catch (error) {
-      this.logger.error("❌ Failed to fetch open positions for reverse:", error instanceof Error ? error.message : error);
       await this.sendReverseResult({
-        status: "error", queriedId: orderId, symbol,
+        status: "error",
+        queriedId: orderId,
         error: error instanceof Error ? error.message : String(error),
       });
       return;
     }
-
-    const position = positions.find(
-      (p) => p.symbol === symbol && p.positionType === positionType && p.state !== 3 && p.holdVol > 0
-    );
-    if (!position) {
-      await this.sendReverseResult({ status: "not-open", queriedId: orderId, symbol });
+    if (!resolved) {
+      this.logger.error(`❌ Could not resolve order ${orderId} for reverse`);
+      await this.sendReverseResult({ status: "unknown", queriedId: orderId });
       return;
     }
+    const { symbol, position } = resolved;
+    const positionType = position.positionType;
+    const originalDir = positionType === 1 ? "LONG" : "SHORT";
 
     // 3. Get current price.
     let currentPrice = 0;
@@ -1066,37 +1093,26 @@ export class SignalBot {
     const pct = Math.min(6, Math.max(0.1, riskPercent));
     this.logger.info(`➕ ADD TO requested for order ${orderId} at ${pct}% risk`);
 
-    // 1. Resolve order identity.
-    const identity = await this.resolveOrderIdentity(orderId);
-    if (!identity) {
-      this.logger.error(`❌ Could not resolve order ${orderId} for add-to`);
-      await this.sendAddToResult({ status: "unknown", queriedId: orderId });
-      return;
-    }
-    const { symbol, positionType } = identity;
-    const dir = positionType === 1 ? "LONG" : "SHORT";
-
-    // 2. Find the matching open position.
-    let positions: Position[] = [];
+    // 1. Resolve the target position — positionId first, then order IDs.
+    let resolved: { position: Position; symbol: string } | null;
     try {
-      const res = await this.mexcClient.getOpenPositions();
-      positions = Array.isArray(res.data) ? res.data : [];
+      resolved = await this.resolveOpenPosition(orderId);
     } catch (error) {
-      this.logger.error("❌ Failed to fetch open positions:", error instanceof Error ? error.message : error);
       await this.sendAddToResult({
-        status: "error", queriedId: orderId, symbol,
+        status: "error",
+        queriedId: orderId,
         error: error instanceof Error ? error.message : String(error),
       });
       return;
     }
-
-    const position = positions.find(
-      (p) => p.symbol === symbol && p.positionType === positionType && p.state !== 3 && p.holdVol > 0
-    );
-    if (!position) {
-      await this.sendAddToResult({ status: "not-open", queriedId: orderId, symbol });
+    if (!resolved) {
+      this.logger.error(`❌ Could not resolve order ${orderId} for add-to`);
+      await this.sendAddToResult({ status: "unknown", queriedId: orderId });
       return;
     }
+    const { symbol, position } = resolved;
+    const positionType = position.positionType;
+    const dir = positionType === 1 ? "LONG" : "SHORT";
 
     // 3. Get current price.
     let currentPrice = 0;

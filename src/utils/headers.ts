@@ -113,6 +113,16 @@ export function generateHeaders(
  * Build the MEXC GET/DELETE signature parameter string:
  * business params sorted in dictionary order and joined with '&'.
  * null/undefined values are omitted. Returns "" when there are no params.
+ *
+ * Values are percent-encoded with the same form-urlencoded encoding that
+ * axios/URLSearchParams applies when it serializes `params` into the request
+ * URL. This keeps the SIGNED string byte-for-byte identical to the query
+ * string MEXC receives, which the server verifies the signature against.
+ *
+ * Critical case: comma-separated list params such as `states=1,3` for the
+ * plan-order list endpoint. axios serializes the comma as `%2C` in the URL;
+ * if the signature is computed over the raw `1,3`, MEXC rejects the request
+ * with code 602 ("Confirming signature failed"). Encoding here fixes it.
  */
 export function buildQueryString(
   params?: Record<string, string | number | undefined>
@@ -122,7 +132,13 @@ export function buildQueryString(
   for (const key of Object.keys(params).sort()) {
     const value = params[key];
     if (value === undefined || value === null || value === "") continue;
-    pairs.push(`${key}=${value}`);
+    // Match URLSearchParams form-urlencoded encoding exactly: encodeURIComponent
+    // plus the extra reserved chars that URLSearchParams percent-encodes.
+    const encoded = encodeURIComponent(String(value)).replace(
+      /[!'()*~]/g,
+      (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase()
+    );
+    pairs.push(`${key}=${encoded}`);
   }
   return pairs.join("&");
 }
