@@ -14,22 +14,27 @@ function fmt(n: number, digits = 2): string {
 /**
  * Estimated gross profit (in quote currency) if price reaches the given
  * take-profit target, before fees. Positive for both LONG and SHORT.
+ *
+ * Accounts for contractSize: profit = volume × contractSize × |tp − entry|
  */
 function estimateTpProfit(t: ResolvedTrade, volume: number, tp: number): number {
   const diff = t.side === 1 ? tp - t.entry : t.entry - tp;
-  return volume * diff;
+  return volume * (t.contractSize || 1) * diff;
 }
 
 /**
  * Estimated profit as a percentage of the initial margin, mirroring the PNL
  * monitor's pnlPercent = realisedPnl / margin * 100.
+ *
+ * Margin also accounts for contractSize.
  */
 function estimateTpProfitPercent(
   t: ResolvedTrade,
   volume: number,
   tp: number
 ): number {
-  const margin = (volume * t.entry) / t.leverage;
+  const cs = t.contractSize || 1;
+  const margin = (volume * cs * t.entry) / t.leverage;
   if (margin <= 0) return NaN;
   return (estimateTpProfit(t, volume, tp) / margin) * 100;
 }
@@ -67,7 +72,7 @@ export function formatOrderPlacedMessage(
     `🪙 <b>${t.mexcSymbol}</b> · ${dir} · ${t.leverage}x · ${marginMode}`,
     typeLabel,
     `SL: ${fmt(t.stopLossPrice)} · TP: ${fmt(orderTp)}`,
-    `Vol: ${fmt(orderVolume)} · Notional: ~${fmt(orderVolume * t.entry)} ${currency}`,
+    `Vol: ${fmt(orderVolume)} · Notional: ~${fmt(orderVolume * (t.contractSize || 1) * t.entry)} ${currency}`,
     `Risk: ${fmt(orderRisk)} ${currency} (${(t.riskPercent * 100).toFixed(1)}%)`,
     `Est. profit @ TP ${fmt(orderTp)}: ~${fmt(tpProfit)} ${currency} (${fmt(tpProfitPct, 1)}%)`,
     ``,

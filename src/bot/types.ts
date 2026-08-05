@@ -67,6 +67,8 @@ export interface ResolvedTrade {
   volUnit: number;
   /** Current market price at time of resolution (used to determine trigger direction) */
   currentPrice: number;
+  /** Contract size from MEXC (e.g. 0.0001 for BTC_USDT — 1 contract = 0.0001 BTC) */
+  contractSize: number;
 }
 
 /**

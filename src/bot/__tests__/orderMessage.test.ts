@@ -34,6 +34,7 @@ function makeTrade(overrides?: Partial<ResolvedTrade>): ResolvedTrade {
     volScale: 0,
     volUnit: 1,
     currentPrice: 123,
+    contractSize: 1,
     ...overrides,
   };
 }
