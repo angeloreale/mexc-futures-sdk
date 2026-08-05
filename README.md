@@ -235,7 +235,7 @@ Entry: 67,000.00 → Exit: 69,000.00
 
 Every `SUMMARY_INTERVAL_HOURS` (default `8`), the bot sends a summary of the current account state to the summary channel, showing:
 
-- **Open positions** — symbol, direction, leverage, entry price, **current PNL**, and the **max / min PNL** reached over the trailing `SUMMARY_WINDOW_HOURS` (default `4` hours), plus each position's **position ID**
+- **Open positions** — symbol, direction, leverage, entry price, **current PNL**, and the **max / min PNL** reached over the trailing `SUMMARY_WINDOW_HOURS` (default `4` hours), plus each position's **position ID**, its **estimated TP / SL P&L** and the **% of the TP target already reached**
 - **Pending orders** — one line per pending STOP (entry) order: symbol, direction, trigger price, volume and a shortened **order ID**
 - **Available balance** and **equity**
 
@@ -251,12 +251,14 @@ Example message:
 Entry: 67,000.00
 PNL: +176.70 USDT
    max +210.10 / min -5.30 USDT
+🎯 Est TP +500.00 / SL -250.00 USDT · 35% of TP
 🆔 5839201
 ──────────────
 🔴 ETH_USDT SHORT · 5x
 Entry: 3,500.00
 PNL: -12.00 USDT
    max +40.50 / min -15.20 USDT
+🎯 Est TP +180.00 / SL -90.00 USDT · -7% of TP
 🆔 2948573
 
 📌 Pending Orders (2)
@@ -266,6 +268,8 @@ PNL: -12.00 USDT
 💼 Available: 1,234.56 USDT
 📈 Equity: 5,678.90 USDT
 ```
+
+The **estimated TP/SL P&L** is what the position would make/lose if the price reached its take-profit or stop-loss level (derived from the current PNL, entry, volume and the contract's size). The **% of TP** shows how much of that target is already banked as unrealized PNL (negative = currently losing). The SL/TP levels come from the bot's own orders (stored at execution) and, as a fallback, from the pending TP/SL stop orders on the exchange — so the estimate and the >50% alerts keep working across restarts and for manually opened positions.
 
 Pending orders are the orders currently open on the exchange, fetched from the futures API in two calls and shown one line each:
 - **STOP entries** — from `GET /private/planorder/list/orders` (untriggered): direction, `STOP` with its trigger condition (`≥`/`≤`) and price.
@@ -311,7 +315,7 @@ Entry: 67,000.00 → Now: 66,350.00
 🎯 Stop-loss @ 66,000.00 — 65% of the way
 ```
 
-The SL/TP levels come from the bot's own order execution; manually placed positions won't trigger alerts. Alert flags are reset when the position closes, so a new position on the same symbol can alert again. Stale entries older than `LOG_RETENTION_DAYS` are pruned automatically.
+The SL/TP levels come from the bot's own order execution (and, as a fallback, from the pending TP/SL stop orders on the exchange, so alerts survive restarts and cover manually opened positions with attached TP/SL). Progress is computed from the position's unrealized PNL, volume and the contract's size, so it stays correct for contracts with a non-1 contract size (e.g. ATOM 0.1, BTC 0.0001). Alert flags are reset when the position closes, so a new position on the same symbol can alert again. Stale entries older than `LOG_RETENTION_DAYS` are pruned automatically.
 
 **Closing a position manually:**
 

@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <title>Dupip Crypto Connector</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Header -->
+  <header>
+    <div class="header-logo">
+      <img src="icon.svg" alt="Dupip" />
+      <h1>Dupip Crypto Connector</h1>
+    </div>
+    <div id="status-bar">
+      <span id="status-indicator" class="status-stopped"></span>
+      <span id="status-text">Stopped</span>
+      <span id="mode-badge" class="badge"></span>
+    </div>
+  </header>
+
+  <!-- Tab Bar -->
+  <nav id="tab-bar">
+    <button class="tab active" data-tab="config">⚙️ Configuration</button>
+    <button class="tab" data-tab="logs">📋 Logs</button>
+    <button class="tab" data-tab="about">ℹ️ About</button>
+  </nav>
+
+  <!-- Config Tab -->
+  <section id="tab-config" class="tab-content active">
+    <!-- Persona toggle -->
+    <div id="persona-bar">
+      <span class="persona-label active" data-role="follower">📡 Signal Follower</span>
+      <label class="toggle-switch">
+        <input type="checkbox" id="persona-toggle" />
+        <span class="toggle-slider"></span>
+      </label>
+      <span class="persona-label" data-role="provider">📢 Signal Provider</span>
+    </div>
+    <form id="config-form">
+      <fieldset>
+        <legend>🔐 MEXC Credentials</legend>
+        <div class="help-text">Use API Key + Secret (recommended) OR a browser auth token.</div>
+        <div class="field">
+          <label for="MEXC_KEY">MEXC API Key</label>
+          <input type="password" id="MEXC_KEY" placeholder="mx_..." />
+        </div>
+        <div class="field">
+          <label for="MEXC_SECRET_KEY">MEXC Secret Key</label>
+          <input type="password" id="MEXC_SECRET_KEY" placeholder="..." />
+        </div>
+        <div class="field">
+          <label for="MEXC_AUTH_TOKEN">MEXC Auth Token <small>(browser WEB token, legacy)</small></label>
+          <input type="password" id="MEXC_AUTH_TOKEN" placeholder="WEB..." />
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>📨 Telegram</legend>
+        <div class="field required">
+          <label for="TELEGRAM_BOT_TOKEN">Bot Token <small>(from @BotFather)</small></label>
+          <input type="password" id="TELEGRAM_BOT_TOKEN" placeholder="123456:ABC..." />
+        </div>
+        <div class="field required">
+          <label for="ALLOWED_CHANNELS">Allowed Channels <small>(comma-separated IDs or @usernames)</small></label>
+          <input type="text" id="ALLOWED_CHANNELS" placeholder="-1001234567890,@signals_channel" />
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>📊 Trading Settings</legend>
+        <div class="field-row">
+          <div class="field">
+            <label for="DEFAULT_LEVERAGE">Default Leverage (1-200)</label>
+            <input type="number" id="DEFAULT_LEVERAGE" min="1" max="200" value="10" />
+          </div>
+          <div class="field">
+            <label for="OPEN_TYPE">Margin Mode</label>
+            <select id="OPEN_TYPE">
+              <option value="1">Isolated (1)</option>
+              <option value="2">Cross (2)</option>
+            </select>
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>⚠️ Risk Management</legend>
+        <div class="field-row">
+          <div class="field">
+            <label for="RISK_PERCENT">Risk % per trade (0.01 = 1%)</label>
+            <input type="number" id="RISK_PERCENT" min="0.001" max="0.1" step="0.001" value="0.01" />
+          </div>
+          <div class="field">
+            <label for="DEFAULT_TP_RATIO">Default TP:SL Ratio</label>
+            <input type="number" id="DEFAULT_TP_RATIO" min="0.1" step="0.1" value="1.5" />
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="MAX_CONCURRENT_TRADES">Max Concurrent Trades</label>
+            <input type="number" id="MAX_CONCURRENT_TRADES" min="1" max="50" value="5" />
+          </div>
+          <div class="field">
+            <label for="MAX_NOTIONAL_PER_TRADE">Max Notional/Trade (USDT)</label>
+            <input type="number" id="MAX_NOTIONAL_PER_TRADE" min="1" value="10000" />
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>🛡️ Operational</legend>
+        <div class="field-row">
+          <div class="field">
+            <label for="DRY_RUN">Dry Run <small>(parse signals, don't trade)</small></label>
+            <select id="DRY_RUN">
+              <option value="false">Off (Live Trading)</option>
+              <option value="true">On (Dry Run)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="TRADING_ENABLED">Master Trading Switch</label>
+            <select id="TRADING_ENABLED">
+              <option value="true">Enabled</option>
+              <option value="false">Disabled</option>
+            </select>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="LOG_LEVEL">Log Level</label>
+            <select id="LOG_LEVEL">
+              <option value="ERROR">Error</option>
+              <option value="WARN">Warning</option>
+              <option value="INFO" selected>Info</option>
+              <option value="DEBUG">Debug</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="BASE_CURRENCY">Base Currency</label>
+            <input type="text" id="BASE_CURRENCY" value="USDT" />
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>⚡ API Rate Limiting</legend>
+        <div class="field-row">
+          <div class="field">
+            <label for="ORDER_RATE_CAPACITY">Burst Capacity</label>
+            <input type="number" id="ORDER_RATE_CAPACITY" min="1" max="20" value="3" />
+          </div>
+          <div class="field">
+            <label for="ORDER_RATE_INTERVAL_MS">Interval (ms)</label>
+            <input type="number" id="ORDER_RATE_INTERVAL_MS" min="10" value="200" />
+          </div>
+        </div>
+      </fieldset>
+
+      <div id="provider-fields" class="provider-only">
+      <fieldset>
+        <legend>🔔 Position Close Notifications</legend>
+        <div class="field">
+          <label for="PNL_NOTIFICATION_CHANNEL">PNL Channel ID <small>(leave empty to disable)</small></label>
+          <input type="text" id="PNL_NOTIFICATION_CHANNEL" placeholder="-1001234567890" />
+        </div>
+        <div class="field">
+          <label for="POSITION_MONITOR_INTERVAL_SECONDS">Monitor Interval (seconds)</label>
+          <input type="number" id="POSITION_MONITOR_INTERVAL_SECONDS" min="5" value="30" />
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>📋 Position Summaries</legend>
+        <div class="field">
+          <label for="SUMMARY_NOTIFICATION_CHANNEL">Summary Channel <small>(reuses PNL channel if empty)</small></label>
+          <input type="text" id="SUMMARY_NOTIFICATION_CHANNEL" placeholder="-1001234567890" />
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="SUMMARY_INTERVAL_HOURS">Summary Interval (hours)</label>
+            <input type="number" id="SUMMARY_INTERVAL_HOURS" min="1" value="8" />
+          </div>
+          <div class="field">
+            <label for="SUMMARY_WINDOW_HOURS">PNL Window (hours)</label>
+            <input type="number" id="SUMMARY_WINDOW_HOURS" min="1" value="4" />
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>📡 Signal Resolver <small>(monitor-only channels)</small></legend>
+        <div class="field">
+          <label for="SIGNAL_RESOLVER_CHANNELS">Resolver Channels <small>(comma-separated)</small></label>
+          <input type="text" id="SIGNAL_RESOLVER_CHANNELS" placeholder="-1009876543210" />
+        </div>
+        <div class="field">
+          <label for="SIGNAL_RESOLVER_INTERVAL_SECONDS">Resolver Interval (seconds)</label>
+          <input type="number" id="SIGNAL_RESOLVER_INTERVAL_SECONDS" min="5" value="15" />
+        </div>
+      </fieldset>
+      </div><!-- /#provider-fields -->
+
+      <fieldset>
+        <legend>💾 Storage</legend>
+        <div class="field-row">
+          <div class="field">
+            <label for="LOG_RETENTION_DAYS">Log Retention (days)</label>
+            <input type="number" id="LOG_RETENTION_DAYS" min="1" value="90" />
+          </div>
+          <div class="field">
+            <label>Data Location</label>
+            <button type="button" id="btn-open-config-dir" class="btn-sm">📂 Open Folder</button>
+          </div>
+        </div>
+      </fieldset>
+
+      <div class="form-actions">
+        <button type="button" id="btn-save" class="btn btn-primary">💾 Save Configuration</button>
+        <span id="save-status"></span>
+      </div>
+    </form>
+  </section>
+
+  <!-- Logs Tab -->
+  <section id="tab-logs" class="tab-content">
+    <div id="log-controls">
+      <button type="button" id="btn-start" class="btn btn-success" disabled>▶️ Start Bot</button>
+      <button type="button" id="btn-stop" class="btn btn-danger" disabled>⏹️ Stop Bot</button>
+      <button type="button" id="btn-clear-logs" class="btn btn-sm">🧹 Clear</button>
+      <button type="button" id="btn-open-logs" class="btn btn-sm">📂 Open Logs</button>
+    </div>
+    <div id="log-output" class="console">
+      <div class="log-line muted">Bot logs will appear here after starting...</div>
+    </div>
+  </section>
+
+  <!-- About Tab -->
+  <section id="tab-about" class="tab-content">
+    <div class="about-card">
+      <h2>Dupip Crypto Connector</h2>
+      <p class="version">v1.6.2</p>
+      <p>
+        Automated futures trading connector that listens for trade signals on
+        Telegram channels and executes them on MEXC Futures. Powered by Dupip.
+      </p>
+      <ul>
+        <li>Supports Market and Trigger (limit) orders</li>
+        <li>Position sizing based on account equity &amp; fixed risk</li>
+        <li>Stop-loss and take-profit management</li>
+        <li>PNL tracking and position summaries</li>
+        <li>Idempotent signal processing</li>
+        <li>Token-bucket API rate limiting</li>
+      </ul>
+      <p class="muted">
+        Configuration is stored at: <code id="config-path">...</code>
+      </p>
+      <p class="muted">
+        Logs are stored at: <code id="log-path">...</code>
+      </p>
+    </div>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>

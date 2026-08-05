@@ -1,0 +1,43 @@
+appId: com.dupip.cryptoconnector
+productName: Dupip Crypto Connector
+copyright: Copyright © 2025 Dupip
+
+directories:
+  output: release
+
+files:
+  - dist/**/*
+  - dist-desktop/**/*
+  - desktop/renderer/**/*
+  - node_modules/**/*
+  - package.json
+
+mac:
+  category: public.app-category.finance
+  target:
+    - dmg
+    - zip
+  icon: desktop/renderer/icon.png
+  artifactName: ${productName}-${version}-mac.${ext}
+
+win:
+  target:
+    - nsis
+    - portable
+  icon: desktop/renderer/icon.png
+  artifactName: ${productName}-${version}-win.${ext}
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Finance
+  icon: desktop/renderer/icon.png
+  artifactName: ${productName}-${version}-linux.${ext}
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: desktop/renderer/icon.png
+  uninstallerIcon: desktop/renderer/icon.png
+  installerHeaderIcon: desktop/renderer/icon.png
