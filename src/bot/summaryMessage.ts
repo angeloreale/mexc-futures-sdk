@@ -59,7 +59,11 @@ export function formatPositionSummaryMessage(summary: PositionSummary): string {
       lines.push(`Entry: ${fmt(p.openAvgPrice)}`);
       lines.push(`PNL: <b>${fmtSigned(p.currentPnl)} ${cur}</b>`);
       lines.push(`   max ${fmtSigned(p.maxPnl)} / min ${fmtSigned(p.minPnl)} ${cur}`);
-      lines.push(`🆔 ${p.positionId}${p.fillOrderId ? ` · close <code>${shortId(p.fillOrderId)}</code>` : ""}`);
+      if (p.fillOrderId) {
+        lines.push(`🆔 <code>${p.fillOrderId}</code>`);
+      } else {
+        lines.push(`🆔 ${p.positionId} (no fill order ID — use symbol + direction)`);
+      }
     }
   }
   lines.push(``);

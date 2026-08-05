@@ -3,8 +3,8 @@
  * the bot when an order is placed and read by the summary monitor to evaluate
  * the >50%-toward-SL / >50%-toward-TP alert threshold.
  *
- * No order IDs are stored — this is purely for alerting, not for the
- * `Close {orderId}` command (which resolves via the MEXC `getOrder` API).
+ * Also stores the fill order ID for each position so the summary (and the
+ * CLOSE / REVERSE / ADD TO commands) can use it to identify the position.
  *
  * Entries are removed:
  *   - immediately when the position closes (via `remove()` called by the PNL monitor)
@@ -24,6 +24,13 @@ export class SlTpStore {
 
   remove(symbol: string): void {
     this.map.delete(symbol);
+  }
+
+  /**
+   * Get all entries. Used by the summary monitor to resolve fill order IDs.
+   */
+  entries(): IterableIterator<[string, SlTpEntry]> {
+    return this.map.entries();
   }
 
   /**
@@ -54,4 +61,6 @@ export interface SlTpEntry {
   positionType: 1 | 2;
   /** Unix ms when the entry was stored, used for retention-based pruning. */
   setAt: number;
+  /** Fill order ID — use this for CLOSE / REVERSE / ADD TO commands. */
+  orderId?: string;
 }

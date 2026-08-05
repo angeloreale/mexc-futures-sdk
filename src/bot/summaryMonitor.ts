@@ -516,7 +516,7 @@ export class PositionSummaryMonitor {
         this.logger.info(
           `  ${icon} ${p.symbol} ${dir} ${p.leverage}x · Entry ${fmtN(p.openAvgPrice)} · ` +
             `PNL ${fmtS(p.currentPnl)} ${cur} · max ${fmtS(p.maxPnl)} / min ${fmtS(p.minPnl)}` +
-            `${p.fillOrderId ? ` · close ${shortId(p.fillOrderId)}` : ""}`
+            `${p.fillOrderId ? ` · 🆔 ${p.fillOrderId}` : ""}`
         );
       }
     }
@@ -845,15 +845,26 @@ export class PositionSummaryMonitor {
   }
 
   /**
-   * Fetch executed plan orders (state 3) and build a map of
-   *   `${symbol}:${positionType}` → fillOrderId
-   * so the summary can show the fill order ID users should use for
-   * CLOSE / REVERSE / ADD TO commands.
+   * Fetch executed plan orders (state 3) and also check slTpStore to build a
+   * map of `${symbol}:${positionType}` → fillOrderId.  The fill order ID is
+   * the only ID that can be used with CLOSE / REVERSE / ADD TO commands.
    */
   private async resolveFillOrderIds(
     openPositions: Position[]
   ): Promise<Map<string, string>> {
     const map = new Map<string, string>();
+
+    // 1. Check slTpStore first (covers market orders + recently-placed trigger orders).
+    for (const [symbol, entry] of this.slTpStore.entries()) {
+      if (!entry.orderId || entry.orderId === "DRY_RUN" || entry.orderId === "DISABLED") continue;
+      const key = `${symbol}:${entry.positionType}`;
+      if (!map.has(key)) {
+        map.set(key, entry.orderId);
+      }
+    }
+
+    // 2. Also check executed plan orders (state 3) — catches positions where
+    //    the slTpStore was cleared (e.g. a restart).
     try {
       const res = await this.client.getPlanOrders(undefined, "3"); // executed only
       const list = this.asList((res as any).data);
@@ -870,14 +881,15 @@ export class PositionSummaryMonitor {
           map.set(key, fillOrderId);
         }
       }
-      this.logger.debug(
-        `🔍 Resolved ${map.size} fill order ID(s) for open positions`
-      );
     } catch (e) {
       this.logger.debug(
-        `⚠️ Could not resolve fill order IDs: ${e instanceof Error ? e.message : e}`
+        `⚠️ Could not fetch plan orders for fill IDs: ${e instanceof Error ? e.message : e}`
       );
     }
+
+    this.logger.debug(
+      `🔍 Resolved ${map.size} fill order ID(s) for open positions`
+    );
     return map;
   }
 

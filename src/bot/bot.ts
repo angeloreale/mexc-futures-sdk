@@ -571,9 +571,10 @@ export class SignalBot {
       tp: nearestTp,
       positionType: t.side === 1 ? 1 : 2,
       setAt: Date.now(),
+      orderId: record.orderId,
     });
     this.logger.info(
-      `💾 SL/TP stored for ${t.mexcSymbol}: SL=${t.stopLossPrice} TP=${nearestTp}`
+      `💾 SL/TP stored for ${t.mexcSymbol}: SL=${t.stopLossPrice} TP=${nearestTp} orderId=${record.orderId}`
     );
   }
 
