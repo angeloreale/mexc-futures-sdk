@@ -800,12 +800,6 @@ export class SignalBot {
       contract?.volScale,
       contract?.volUnit
     );
-      currentPrice,
-      positionType,
-      position.openType,
-      position.leverage,
-      pct
-    );
 
     if (result.success) {
       if (!isPartial) {
