@@ -50,8 +50,8 @@ describe("formatPositionSummaryMessage", () => {
     expect(text).toContain("Last 4h · report every 8h");
     expect(text).toContain("Open Positions (2)");
     expect(text).toContain("BTC_USDT</b> LONG · 10x");
-    expect(text).toContain("🆔 <code>1</code> · <code>CLOSE 1</code>");
-    expect(text).toContain("🆔 <code>2</code> · <code>CLOSE 2</code>");
+    expect(text).toContain("🆔 <code>CLOSE 1</code>");
+    expect(text).toContain("🆔 <code>CLOSE 2</code>");
     expect(text).toContain("PNL: <b>+176.70 USDT</b>");
     expect(text).toContain("max +210.10 / min -5.30 USDT");
     expect(text).toContain("ETH_USDT</b> SHORT · 5x");

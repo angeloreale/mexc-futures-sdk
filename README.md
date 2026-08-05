@@ -317,7 +317,7 @@ The SL/TP levels come from the bot's own order execution; manually placed positi
 
 Send `Close {id}` to an allowed channel and the bot will resolve the position and close it immediately with a market order. A confirmation is sent to the summary channel.
 
-The summary shows the recommended identifier for each open position — its **position ID** — as `🆔 {positionId} · CLOSE {positionId}`:
+The summary shows the recommended identifier for each open position — its **position ID** — as the ready-to-use close command `🆔 CLOSE {positionId}`:
 
 ```
 Close 1462152523

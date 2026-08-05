@@ -59,14 +59,12 @@ export function formatPositionSummaryMessage(summary: PositionSummary): string {
       lines.push(`Entry: ${fmt(p.openAvgPrice)}`);
       lines.push(`PNL: <b>${fmtSigned(p.currentPnl)} ${cur}</b>`);
       lines.push(`   max ${fmtSigned(p.maxPnl)} / min ${fmtSigned(p.minPnl)} ${cur}`);
-      // The position ID is the most reliable identifier to close a position:
-      // it is always present on the open-positions API and uniquely identifies
-      // the exact LONG/SHORT position (hedge mode can hold both on one symbol),
-      // so `CLOSE {positionId}` never hits MEXC's "wrong direction" error.
-      lines.push(`🆔 <code>${p.positionId}</code> · <code>CLOSE ${p.positionId}</code>`);
-      if (p.fillOrderId && p.fillOrderId !== String(p.positionId)) {
-        lines.push(`   fill: <code>${p.fillOrderId}</code>`);
-      }
+      // The position ID is the single identifier that works with the CLOSE
+      // handler: it is always present on the open-positions API and uniquely
+      // identifies the exact LONG/SHORT position (hedge mode can hold both on
+      // one symbol), so `CLOSE {positionId}` never hits MEXC's "wrong
+      // direction" error.
+      lines.push(`🆔 <code>CLOSE ${p.positionId}</code>`);
     }
   }
   lines.push(``);
