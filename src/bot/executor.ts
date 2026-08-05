@@ -143,8 +143,8 @@ export class TradeExecutor {
       return { success: false, error: "Trading disabled" };
     }
 
-    // side 2 = close long, side 4 = close short
-    const side = positionType === 1 ? 2 : 4;
+    // side 4 = close long, side 2 = close short (see types/orders.ts)
+    const side = positionType === 1 ? 4 : 2;
 
     const params: SubmitOrderRequest = {
       symbol,
