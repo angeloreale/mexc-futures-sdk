@@ -87,6 +87,8 @@ export class TradeExecutor {
    * @param openType 1=isolated, 2=cross
    * @param leverage Leverage used (optional, MEXC may require for isolated)
    * @param closePercent Percentage of the position to close (1–100, default 100 = full close)
+   * @param volScale Volume decimal places for this contract (0 = integer), defaults to 8 as safety
+   * @param volUnit Volume step unit for this contract (e.g. 0.01), defaults to 1e-8 as safety
    */
   async closePosition(
     symbol: string,
@@ -95,15 +97,39 @@ export class TradeExecutor {
     positionType: 1 | 2,
     openType: 1 | 2,
     leverage: number,
-    closePercent: number = 100
+    closePercent: number = 100,
+    volScale?: number,
+    volUnit?: number
   ): Promise<{ success: boolean; orderId?: string; volume?: number; error?: string }> {
-    // Calculate the volume to close, respecting the percentage.
-    // Round down to a reasonable precision (8 decimals should be plenty).
+    // Calculate the volume to close, respecting the percentage and contract precision.
     const rawVol = position.holdVol * (closePercent / 100);
-    const closeVol = Math.floor(rawVol * 1e8) / 1e8;
+
+    // Round to contract precision.  When volScale/volUnit are known, use them;
+    // otherwise fall back to a safe default (8 decimals) with a warning.
+    let closeVol: number;
+    if (volScale !== undefined && volUnit !== undefined && volUnit > 0) {
+      const stepped = Math.floor(rawVol / volUnit) * volUnit;
+      if (volScale > 0) {
+        const factor = Math.pow(10, volScale);
+        closeVol = Math.floor(stepped * factor) / factor;
+      } else {
+        closeVol = stepped;
+      }
+    } else {
+      // Fallback: round to 8 decimals — may fail for contracts with coarse volume steps.
+      closeVol = Math.floor(rawVol * 1e8) / 1e8;
+      this.logger.warn(
+        `⚠️ No volScale/volUnit provided for ${symbol} — rounding vol to 8dp (may fail for some contracts)`
+      );
+    }
 
     if (closeVol <= 0) {
-      return { success: false, error: `Computed close volume is zero (${closePercent}% of ${position.holdVol})` };
+      // If the rounded volume rounds to zero, try the minimum possible step.
+      if (volUnit && volUnit > 0) {
+        closeVol = volUnit;
+      } else {
+        return { success: false, error: `Computed close volume is zero (${closePercent}% of ${position.holdVol})` };
+      }
     }
 
     if (this.config.dryRun) {

@@ -775,7 +775,11 @@ export class SignalBot {
       // fall through with 0; MEXC market orders accept price=0
     }
 
-    // 4. Validate and normalise close percent.
+    // 4. Resolve contract details for volume precision.
+    await this.resolver.refreshIfNeeded();
+    const contract = await this.resolver.resolve(symbol);
+
+    // 5. Validate and normalise close percent.
     const pct = closePercent !== undefined ? Math.min(100, Math.max(1, closePercent)) : 100;
     const isPartial = pct < 100;
 
@@ -784,10 +788,18 @@ export class SignalBot {
       `${isPartial ? `${pct}% (partial)` : "100% (full)"} — holdVol=${position.holdVol}`
     );
 
-    // 5. Close.
+    // 6. Close.
     const result = await this.executor.closePosition(
       symbol,
       position,
+      currentPrice,
+      positionType,
+      position.openType,
+      position.leverage,
+      pct,
+      contract?.volScale,
+      contract?.volUnit
+    );
       currentPrice,
       positionType,
       position.openType,
@@ -922,9 +934,22 @@ export class SignalBot {
       );
     }
 
-    // 5. Close the position fully (100%).
+    // 5. Get contract details for vol precision + later sizing.
+    await this.resolver.refreshIfNeeded();
+    const contract = await this.resolver.resolve(symbol);
+    if (!contract) {
+      await this.sendReverseResult({
+        status: "error", queriedId: orderId, symbol,
+        originalDirection: originalDir,
+        error: `Symbol ${symbol} not tradable`,
+      });
+      return;
+    }
+
+    // 6. Close the position fully (100%).
     const closeResult = await this.executor.closePosition(
-      symbol, position, currentPrice, positionType, position.openType, position.leverage, 100
+      symbol, position, currentPrice, positionType, position.openType, position.leverage, 100,
+      contract?.volScale, contract?.volUnit
     );
     if (!closeResult.success) {
       await this.sendReverseResult({
@@ -959,7 +984,7 @@ export class SignalBot {
       return;
     }
 
-    // 6. Fetch equity for sizing the new position.
+    // 7. Fetch equity for sizing the new position.
     let equity: number;
     try {
       equity = await this.fetchEquity();
@@ -968,18 +993,6 @@ export class SignalBot {
         status: "error", queriedId: orderId, symbol,
         originalDirection: originalDir,
         error: "Failed to fetch equity for sizing",
-      });
-      return;
-    }
-
-    // 7. Get contract details for the symbol.
-    await this.resolver.refreshIfNeeded();
-    const contract = await this.resolver.resolve(symbol);
-    if (!contract) {
-      await this.sendReverseResult({
-        status: "error", queriedId: orderId, symbol,
-        originalDirection: originalDir,
-        error: `Symbol ${symbol} not tradable`,
       });
       return;
     }
