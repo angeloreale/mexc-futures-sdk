@@ -1,9 +1,14 @@
-appId: com.dupip.cryptoconnector
-productName: Dupip Crypto Connector
-copyright: Copyright © 2025 Dupip
+appId: com.dupip.invest.connector
+productName: Dupip Invest Connector
+copyright: Copyright © 2026 Dupip
 
 directories:
   output: release
+
+# Override the entry point ONLY for the packaged app. The SDK's package.json
+# main stays as dist/index.js for npm consumers.
+extraMetadata:
+  main: dist-desktop/main.js
 
 files:
   - dist/**/*
@@ -38,6 +43,3 @@ linux:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
-  installerIcon: desktop/renderer/icon.png
-  uninstallerIcon: desktop/renderer/icon.png
-  installerHeaderIcon: desktop/renderer/icon.png

@@ -21,6 +21,8 @@ export interface ClosedPositionInfo {
   openAvgPrice: number;
   /** Average close price */
   closeAvgPrice: number;
+  /** Remaining volume at close time (contracts), used to derive exit price when closeAvgPrice is unavailable */
+  holdVol: number;
   /** Realized PNL in quote currency (USDT), net of fees */
   realisedPnl: number;
   /** Realized PNL as a percentage of the position's initial margin */
@@ -235,6 +237,7 @@ export class PositionClosureMonitor {
       leverage: src.leverage,
       openAvgPrice: src.openAvgPrice,
       closeAvgPrice: src.closeAvgPrice,
+      holdVol: src.holdVol,
       realisedPnl,
       pnlPercent: margin > 0 ? (realisedPnl / margin) * 100 : 0,
       margin,

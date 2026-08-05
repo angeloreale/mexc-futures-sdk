@@ -1,4 +1,5 @@
 import type { PositionAlert } from "./summaryMonitor";
+import { fmtPrice } from "../utils/numbers";
 
 /**
  * Format a number for display (e.g. "1,234.56"). Non-finite → "—".
@@ -27,7 +28,7 @@ export function formatPositionAlertMessage(alert: PositionAlert): string {
     `${icon} <b>POSITION ALERT — ${pct}% toward ${alert.target}</b>`,
     ``,
     `🪙 <b>${alert.symbol}</b> · ${dir} · ${alert.leverage}x`,
-    `Entry: ${fmt(alert.entry)} → Now: ${fmt(alert.currentPrice)}`,
-    `🎯 ${targetLabel} @ ${fmt(targetPrice)} — ${pct}% of the way`,
+    `Entry: ${fmtPrice(alert.entry)} → Now: ${fmtPrice(alert.currentPrice)}`,
+    `🎯 ${targetLabel} @ ${fmtPrice(targetPrice)} — ${pct}% of the way`,
   ].join("\n");
 }

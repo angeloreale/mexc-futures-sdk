@@ -1,7 +1,7 @@
 {
-  "name": "mexc-futures-sdk",
-  "version": "1.6.2",
-  "description": "Dupip Crypto Connector — MEXC Futures Telegram Signal Bot. Automates futures trading by listening for trade signals on Telegram channels and executing them on MEXC.",
+  "name": "dpip-invest-connector",
+  "version": "0.0.1",
+  "description": "Dupip Invest Connector — MEXC Futures Telegram Signal Bot. Automates futures trading by listening for trade signals on Telegram channels and executing them on MEXC.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -40,15 +40,15 @@
     "mexc-api",
     "maintenance-bypass"
   ],
-  "author": "oboshto",
+  "author": "Angelo Reale <angeloreale@dpip.cc> (https://dpip.cc/@angeloreale)",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/oboshto/mexc-futures-sdk.git"
+    "url": "https://github.com/angeloreale/mexc-futures-sdk.git"
   },
-  "homepage": "https://github.com/oboshto/mexc-futures-sdk#readme",
+  "homepage": "https://github.com/angeloreale/mexc-futures-sdk#readme",
   "bugs": {
-    "url": "https://github.com/oboshto/mexc-futures-sdk/issues"
+    "url": "https://github.com/angeloreale/mexc-futures-sdk/issues"
   },
   "dependencies": {
     "@types/ws": "^8.18.1",
