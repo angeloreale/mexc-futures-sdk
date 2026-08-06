@@ -158,6 +158,23 @@ describe("PositionSummaryMonitor", () => {
     expect(onSummary.mock.calls[0][0].account.availableBalance).toBe(1234.56);
   });
 
+  it("computes total PNL as floating PNL minus realized PNL", async () => {
+    client.getOpenPositions.mockResolvedValue({
+      data: [makePosition({ unRealizedPnl: 176.7, realised: 15.2 })],
+    });
+    client.getAccountAsset.mockResolvedValue({
+      data: { availableBalance: 1000, equity: 5000 },
+    });
+
+    const monitor = makeMonitor(client, store, onSummary, onAlert);
+    await monitor.emitSummary();
+
+    const pos = onSummary.mock.calls[0][0].openPositions[0];
+    expect(pos.currentPnl).toBe(176.7); // floating PNL
+    expect(pos.realisedPnl).toBe(15.2); // realized PNL
+    expect(pos.totalPnl).toBeCloseTo(161.5, 6); // floating − realized
+  });
+
   // ── Alert tests ─────────────────────────────────────────────────────
 
   it("fires SL alert when LONG position is >50% toward SL", async () => {

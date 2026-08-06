@@ -19,6 +19,9 @@ function makeSummary(overrides?: Partial<PositionSummary>): PositionSummary {
         minPnl: -5.3,
         margin: 3450,
         holdVol: 1,
+        realisedPnl: 15.2,
+        holdFee: -2.1,
+        totalPnl: 161.5,
       },
       {
         positionId: "2",
@@ -32,6 +35,9 @@ function makeSummary(overrides?: Partial<PositionSummary>): PositionSummary {
         minPnl: -15.2,
         margin: 700,
         holdVol: 1,
+        realisedPnl: -3.5,
+        holdFee: -0.9,
+        totalPnl: -8.5,
       },
     ],
     account: {
@@ -64,6 +70,10 @@ describe("formatPositionSummaryMessage", () => {
     expect(text).toContain("🆔 <code>CLOSE 2</code>");
     expect(text).toContain("PNL: <b>+176.70 USDT</b>");
     expect(text).toContain("max +210.10 / min -5.30 USDT");
+    expect(text).toContain("💸 Realized: <b>+15.20</b> USDT · Fees: <b>-2.10</b> USDT");
+    expect(text).toContain("💸 Realized: <b>-3.50</b> USDT · Fees: <b>-0.90</b> USDT");
+    expect(text).toContain("🧾 Total PNL (close now): <b>+161.50</b> USDT");
+    expect(text).toContain("🧾 Total PNL (close now): <b>-8.50</b> USDT");
     expect(text).toContain("ETH_USDT</b> SHORT · 5x");
     expect(text).toContain("PNL: <b>-12.00 USDT</b>");
     expect(text).toContain("Pending Orders (0)");
@@ -172,6 +182,9 @@ describe("formatPositionSummaryMessage", () => {
             minPnl: -5.3,
             margin: 3450,
             holdVol: 1,
+            realisedPnl: 15.2,
+            holdFee: -2.1,
+            totalPnl: 161.5,
             estTpPnl: 1039.41,
             estSlPnl: -566.0,
             tpProgress: 0.17,
@@ -189,6 +202,9 @@ describe("formatPositionSummaryMessage", () => {
             minPnl: -15.2,
             margin: 700,
             holdVol: 1,
+            realisedPnl: -3.5,
+            holdFee: -0.9,
+            totalPnl: -8.5,
             estTpPnl: 53.2,
             estSlPnl: -50.0,
             tpProgress: -0.23,
@@ -221,6 +237,9 @@ describe("formatPositionSummaryMessage", () => {
             minPnl: -5.3,
             margin: 3450,
             holdVol: 1,
+            realisedPnl: 0,
+            holdFee: -1.5,
+            totalPnl: 176.7,
             estTpPnl: 1039.41,
             estSlPnl: -566.0,
             // no tpProgress / slProgress

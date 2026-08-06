@@ -59,6 +59,10 @@ export function formatPositionSummaryMessage(summary: PositionSummary): string {
       lines.push(`Entry: ${fmt(p.openAvgPrice)}`);
       lines.push(`PNL: <b>${fmtSigned(p.currentPnl)} ${cur}</b>`);
       lines.push(`   max ${fmtSigned(p.maxPnl)} / min ${fmtSigned(p.minPnl)} ${cur}`);
+      lines.push(
+        `💸 Realized: <b>${fmtSigned(p.realisedPnl)}</b> ${cur} · Fees: <b>${fmtSigned(p.holdFee)}</b> ${cur}`
+      );
+      lines.push(`🧾 Total PNL (close now): <b>${fmtSigned(p.totalPnl)}</b> ${cur}`);
       // Total estimated P&L at TP/SL. Winning positions show how far toward
       // the TP target the current PNL is; losing positions show how far toward
       // the SL (a positive %) instead of a misleading negative "% of TP".

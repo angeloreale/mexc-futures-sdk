@@ -53,6 +53,12 @@ export interface OpenPositionSummary {
   margin: number;
   /** Remaining volume (contracts). */
   holdVol: number;
+  /** Realized PNL of the position (net of fees, from MEXC `realised`). */
+  realisedPnl: number;
+  /** Holding/funding fee accrued on the position (negative = paid, from MEXC `holdFee`). */
+  holdFee: number;
+  /** Estimated settlement PNL if the position were closed right now (floating PNL − realized PNL). */
+  totalPnl: number;
   /** Estimated PNL if the position reaches its TP target (quote currency). */
   estTpPnl?: number;
   /** Estimated PNL if the position hits its SL (quote currency, negative). */
@@ -466,6 +472,11 @@ export class PositionSummaryMonitor {
           minPnl,
           margin: p.oim || p.im || 0,
           holdVol: p.holdVol,
+          realisedPnl: toFiniteNumber(p.realised),
+          holdFee: toFiniteNumber(p.holdFee),
+          // What the position would settle for if closed right now:
+          // floating (unrealized) PNL minus the realized PNL already booked.
+          totalPnl: currentPnl - toFiniteNumber(p.realised),
         };
       });
 
@@ -592,6 +603,8 @@ export class PositionSummaryMonitor {
         this.logger.info(
           `  ${icon} ${p.symbol} ${dir} ${p.leverage}x · Entry ${fmtN(p.openAvgPrice)} · ` +
             `PNL ${fmtS(p.currentPnl)} ${cur} · max ${fmtS(p.maxPnl)} / min ${fmtS(p.minPnl)}` +
+            ` · Realized ${fmtS(p.realisedPnl)} / Fees ${fmtS(p.holdFee)} ${cur}` +
+            ` · Total ${fmtS(p.totalPnl)} ${cur}` +
             estLine +
             ` · 🆔 ${p.positionId}`
         );
