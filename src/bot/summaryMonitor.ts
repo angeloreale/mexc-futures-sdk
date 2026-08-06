@@ -59,6 +59,8 @@ export interface OpenPositionSummary {
   estSlPnl?: number;
   /** Fraction (0..1+) of the TP-target PNL currently reached via currentPnl. */
   tpProgress?: number;
+  /** Fraction (0..1+) of the SL-target PNL currently reached via currentPnl (losing positions). */
+  slProgress?: number;
   /** Fill order ID (regular MEXC order ID) — use this for CLOSE/REVERSE/ADD TO commands. */
   fillOrderId?: string;
 }
@@ -532,10 +534,18 @@ export class PositionSummaryMonitor {
       for (const p of summary.openPositions) {
         const dir = p.positionType === 1 ? "LONG" : "SHORT";
         const icon = p.currentPnl >= 0 ? "🟢" : "🔴";
+        // Winning positions show % toward TP; losing positions show % toward SL.
+        const isWinning = p.currentPnl >= 0;
+        const prog = isWinning ? p.tpProgress : p.slProgress;
+        const progLine =
+          prog !== undefined && Number.isFinite(prog)
+            ? isWinning
+              ? ` (${(prog * 100).toFixed(0)}% of TP)`
+              : ` (${Math.abs(prog * 100).toFixed(0)}% of SL)`
+            : "";
         const estLine =
           p.estTpPnl !== undefined && p.estSlPnl !== undefined
-            ? ` · Est TP ${fmtS(p.estTpPnl)} / SL ${fmtS(p.estSlPnl)} ${cur}` +
-              `${p.tpProgress !== undefined ? ` (${(p.tpProgress * 100).toFixed(0)}% of TP)` : ""}`
+            ? ` · Est TP ${fmtS(p.estTpPnl)} / SL ${fmtS(p.estSlPnl)} ${cur}` + progLine
             : "";
         this.logger.info(
           `  ${icon} ${p.symbol} ${dir} ${p.leverage}x · Entry ${fmtN(p.openAvgPrice)} · ` +
@@ -1130,6 +1140,7 @@ export class PositionSummaryMonitor {
    *   LONG:  estPnl(target) = (target - entry) * holdVol * contractSize
    *   SHORT: estPnl(target) = (entry - target) * holdVol * contractSize
    * `tpProgress` = currentPnl / estTpPnl (1.0 = target reached, negative = losing).
+   * `slProgress`  = currentPnl / estSlPnl (positive when losing, 1.0 = SL hit).
    */
   private attachEstimatedPnl(
     pos: OpenPositionSummary,
@@ -1166,6 +1177,11 @@ export class PositionSummaryMonitor {
       const estSlPnl = diffSl * vol * cs;
       if (Number.isFinite(estSlPnl) && Math.abs(estSlPnl) > 1e-12) {
         pos.estSlPnl = estSlPnl;
+        // estSlPnl is negative; currentPnl is also negative for a losing
+        // position, so slProgress reads as a positive fraction toward the SL.
+        if (Number.isFinite(pos.currentPnl)) {
+          pos.slProgress = pos.currentPnl / estSlPnl;
+        }
       }
     }
   }

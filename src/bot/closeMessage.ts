@@ -21,6 +21,12 @@ export interface PositionCloseResult {
   error?: string;
   /** Percentage of position closed (only set for partial closes, e.g. 30 for 30%). */
   closePercent?: number;
+  /** Realized PNL for the closed position (net of fees), when available. */
+  realisedPnl?: number;
+  /** Realized PNL as a percentage of the position's initial margin, when available. */
+  pnlPercent?: number;
+  /** Quote currency (e.g. "USDT") used for the PNL display. */
+  currency?: string;
 }
 
 /**
@@ -32,6 +38,16 @@ function fmt(n: number, digits = 2): string {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   });
+}
+
+/**
+ * Format a signed number with an explicit +/- prefix (e.g. "+176.70", "-3.20").
+ * Non-finite → "—".
+ */
+function fmtSigned(n: number, digits = 2): string {
+  if (!Number.isFinite(n)) return "—";
+  const sign = n > 0 ? "+" : n < 0 ? "-" : "";
+  return `${sign}${fmt(Math.abs(n), digits)}`;
 }
 
 /**
@@ -82,13 +98,26 @@ export function formatPositionCloseMessage(
     case "success": {
       const dir = res.positionType === 1 ? "LONG" : "SHORT";
       const partialLabel = res.closePercent ? ` (${res.closePercent}% PARTIAL)` : "";
-      return [
+      const lines = [
         `✅ <b>POSITION CLOSED${partialLabel}</b>`,
         ``,
         `🪙 <b>${res.symbol ?? "?"}</b> · ${dir} · ${res.leverage ?? "?"}x`,
         `Vol: ${fmt((res.volume ?? 0) as number)} @ ${fmt((res.price ?? 0) as number)}`,
-        `Close Order: <code>${res.orderId ?? "?"}</code>`,
-      ].join("\n");
+      ];
+      // Include realized PNL when it was resolved (full closes with a history
+      // record available). Non-finite → omitted entirely.
+      if (Number.isFinite(res.realisedPnl)) {
+        const icon = (res.realisedPnl as number) >= 0 ? "📈" : "📉";
+        const cur = res.currency ? ` ${res.currency}` : "";
+        const pct = Number.isFinite(res.pnlPercent)
+          ? ` (${fmtSigned(res.pnlPercent as number)}%)`
+          : "";
+        lines.push(
+          `${icon} <b>Realized PNL: ${fmtSigned(res.realisedPnl as number)}${cur}${pct}</b>`
+        );
+      }
+      lines.push(`Close Order: <code>${res.orderId ?? "?"}</code>`);
+      return lines.join("\n");
     }
   }
 }

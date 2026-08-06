@@ -333,6 +333,31 @@ describe("PositionSummaryMonitor", () => {
     expect(pos.tpProgress).toBeCloseTo(0.55, 2);
   });
 
+  it("attaches slProgress for losing positions", async () => {
+    // ATOM LONG: entry 1.35, holdVol 244, cs 0.1, TP 1.37, SL 1.33.
+    // estTpPnl = 0.488; estSlPnl = -0.488.
+    // Losing PNL -0.24 → slProgress = -0.24 / -0.488 ≈ 0.49
+    store.set("ATOM_USDT", 1, { sl: 1.33, tp: 1.37, setAt: Date.now() });
+    client.getContractDetail = jest
+      .fn()
+      .mockResolvedValue({ data: [{ symbol: "ATOM_USDT", contractSize: 0.1 }] });
+    client.getOpenPositions.mockResolvedValue({
+      data: [makePosition({ symbol: "ATOM_USDT", positionId: 1, openAvgPrice: 1.35, holdVol: 244, unRealizedPnl: -0.24, positionType: 1 })],
+    });
+    client.getAccountAsset.mockResolvedValue({
+      data: { availableBalance: 1000, equity: 5000 },
+    });
+
+    const monitor = makeMonitor(client, store, onSummary, onAlert);
+    await monitor.emitSummary();
+
+    const pos = onSummary.mock.calls[0][0].openPositions[0];
+    expect(pos.estTpPnl).toBeCloseTo(0.488, 6);
+    expect(pos.estSlPnl).toBeCloseTo(-0.488, 6);
+    expect(pos.tpProgress).toBeCloseTo(-0.49, 2);
+    expect(pos.slProgress).toBeCloseTo(0.49, 2);
+  });
+
   // ── SlTpStore prune test ────────────────────────────────────────────
 
   it("prunes stale SlTpStore entries on sample", async () => {

@@ -842,6 +842,13 @@ export class SignalBot {
       if (!isPartial) {
         this.slTpStore.removeSymbol(symbol);
       }
+      // Resolve realized PNL from position history so the close confirmation
+      // includes it. Only meaningful for full closes in live mode — partial
+      // closes leave the position open, and dry runs place no order.
+      const pnl =
+        !isPartial && !this.config.dryRun
+          ? await this.fetchClosedPnl(symbol, positionType, position.positionId)
+          : null;
       await this.sendCloseResult({
         status: this.config.dryRun ? "dry-run" : "success",
         queriedId: orderId,
@@ -852,6 +859,8 @@ export class SignalBot {
         price: currentPrice || undefined,
         orderId: result.orderId,
         closePercent: isPartial ? pct : undefined,
+        currency: this.config.baseCurrency,
+        ...(pnl ?? {}),
       });
     } else {
       await this.sendCloseResult({
@@ -861,6 +870,52 @@ export class SignalBot {
         error: result.error,
       });
     }
+  }
+
+  /**
+   * Fetch the realized PNL for a just-closed position from MEXC position
+   * history. History can lag the close order slightly, so it retries briefly.
+   *
+   * @returns `{ realisedPnl, pnlPercent }` when the closed record is found,
+   *          or null when it can't be resolved (caller omits the PNL line).
+   */
+  private async fetchClosedPnl(
+    symbol: string,
+    positionType: 1 | 2,
+    positionId: number
+  ): Promise<{ realisedPnl: number; pnlPercent: number } | null> {
+    const maxAttempts = 4;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const res = await this.mexcClient.getPositionHistory({
+          symbol,
+          type: positionType,
+          page_num: 1,
+          page_size: 100,
+        });
+        const list: Position[] = Array.isArray(res.data) ? res.data : [];
+        const found = list.find(
+          (p) => String(p.positionId) === String(positionId)
+        );
+        if (found) {
+          const margin = found.oim || found.im || 0;
+          const realisedPnl = Number.isFinite(found.realised) ? found.realised : 0;
+          return {
+            realisedPnl,
+            pnlPercent: margin > 0 ? (realisedPnl / margin) * 100 : 0,
+          };
+        }
+      } catch (error) {
+        this.logger.warn(
+          `⚠️ Position history fetch failed for close PNL (attempt ${attempt}/${maxAttempts}):`,
+          error instanceof Error ? error.message : error
+        );
+      }
+      if (attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, 750 * attempt));
+      }
+    }
+    return null;
   }
 
   /**

@@ -59,12 +59,19 @@ export function formatPositionSummaryMessage(summary: PositionSummary): string {
       lines.push(`Entry: ${fmt(p.openAvgPrice)}`);
       lines.push(`PNL: <b>${fmtSigned(p.currentPnl)} ${cur}</b>`);
       lines.push(`   max ${fmtSigned(p.maxPnl)} / min ${fmtSigned(p.minPnl)} ${cur}`);
-      // Total estimated P&L at TP/SL and how much of the TP target is reached.
+      // Total estimated P&L at TP/SL. Winning positions show how far toward
+      // the TP target the current PNL is; losing positions show how far toward
+      // the SL (a positive %) instead of a misleading negative "% of TP".
       if (p.estTpPnl !== undefined && p.estSlPnl !== undefined) {
-        const pct = p.tpProgress !== undefined ? p.tpProgress * 100 : NaN;
-        const pctLine = Number.isFinite(pct)
-          ? ` · <b>${fmtSigned(pct, 0)}%</b> of TP`
-          : "";
+        const isWinning = p.currentPnl >= 0;
+        const prog = isWinning ? p.tpProgress : p.slProgress;
+        let pctLine = "";
+        if (Number.isFinite(prog)) {
+          const pct = (prog as number) * 100;
+          pctLine = isWinning
+            ? ` · <b>${fmtSigned(pct, 0)}%</b> of TP`
+            : ` · <b>${fmt(Math.abs(pct), 0)}%</b> of SL`;
+        }
         lines.push(
           `🎯 Est TP <b>${fmtSigned(p.estTpPnl)}</b> / SL <b>${fmtSigned(p.estSlPnl)}</b> ${cur}${pctLine}`
         );

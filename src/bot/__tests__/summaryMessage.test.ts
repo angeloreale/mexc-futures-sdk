@@ -120,6 +120,84 @@ describe("formatPositionSummaryMessage", () => {
     expect(text).toContain("🟡 ETH_USDT SHORT · TP ≤1,856.00 / SL ≥1,884.95 · 0.17 · <code>99</code>");
   });
 
+  it("shows % of TP for winning positions and % of SL for losing ones", () => {
+    const text = formatPositionSummaryMessage(
+      makeSummary({
+        openPositions: [
+          {
+            positionId: "1",
+            symbol: "BTC_USDT",
+            positionType: 1,
+            openType: 1,
+            leverage: 10,
+            openAvgPrice: 67000,
+            currentPnl: 176.7,
+            maxPnl: 210.1,
+            minPnl: -5.3,
+            margin: 3450,
+            holdVol: 1,
+            estTpPnl: 1039.41,
+            estSlPnl: -566.0,
+            tpProgress: 0.17,
+            slProgress: -0.31,
+          },
+          {
+            positionId: "2",
+            symbol: "ETH_USDT",
+            positionType: 2,
+            openType: 1,
+            leverage: 5,
+            openAvgPrice: 3500,
+            currentPnl: -12.0,
+            maxPnl: 40.5,
+            minPnl: -15.2,
+            margin: 700,
+            holdVol: 1,
+            estTpPnl: 53.2,
+            estSlPnl: -50.0,
+            tpProgress: -0.23,
+            slProgress: 0.24,
+          },
+        ],
+      })
+    );
+
+    // Winner → positive % of TP.
+    expect(text).toContain("🎯 Est TP <b>+1,039.41</b> / SL <b>-566.00</b> USDT · <b>+17%</b> of TP");
+    // Loser → positive % of SL (previously showed a negative % of TP).
+    expect(text).toContain("🎯 Est TP <b>+53.20</b> / SL <b>-50.00</b> USDT · <b>24%</b> of SL");
+    expect(text).not.toContain("-23% of TP");
+  });
+
+  it("omits the progress line when TP/SL progress is unavailable", () => {
+    const text = formatPositionSummaryMessage(
+      makeSummary({
+        openPositions: [
+          {
+            positionId: "1",
+            symbol: "BTC_USDT",
+            positionType: 1,
+            openType: 1,
+            leverage: 10,
+            openAvgPrice: 67000,
+            currentPnl: 176.7,
+            maxPnl: 210.1,
+            minPnl: -5.3,
+            margin: 3450,
+            holdVol: 1,
+            estTpPnl: 1039.41,
+            estSlPnl: -566.0,
+            // no tpProgress / slProgress
+          },
+        ],
+      })
+    );
+
+    expect(text).toContain("🎯 Est TP <b>+1,039.41</b> / SL <b>-566.00</b> USDT");
+    expect(text).not.toContain("of TP");
+    expect(text).not.toContain("of SL");
+  });
+
   it("handles an empty account gracefully", () => {
     const text = formatPositionSummaryMessage(
       makeSummary({
