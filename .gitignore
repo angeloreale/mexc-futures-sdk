@@ -8,6 +8,7 @@ release/
 
 # Build outputs
 dist/
+dist.zip
 build/
 *.tsbuildinfo
 

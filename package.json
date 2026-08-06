@@ -21,7 +21,7 @@
     "desktop:build:mac": "npm run build && electron-builder --mac --config electron-builder.yml",
     "desktop:build:win": "npm run build && electron-builder --win --config electron-builder.yml",
     "desktop:build:linux": "npm run build && electron-builder --linux --config electron-builder.yml",
-    "desktop:build:all": "npm run build && electron-builder --mac --win --linux --win arm64 --config electron-builder.yml",
+    "desktop:build:all": "npm run build && electron-builder --mac --win --linux --x64 --arm64 --config electron-builder.yml",
     "desktop:publish": "npm run build && electron-builder --publish always --config electron-builder.yml",
     "dist:zip": "bash scripts/package-dist-zip.sh",
     "prepublishOnly": "npm run build",
