@@ -25,6 +25,7 @@ A TypeScript SDK for MEXC Futures trading with REST API and WebSocket support, p
   - [Periodic Position Summary](#-periodic-position-summary)
 - [Creating the Telegram Bot & Adding Channels](#-creating-the-telegram-bot--adding-channels)
 - [Remote Server Deployment](#-server-deployment)
+- [Desktop App & Auto-Updates](#-desktop-app--auto-updates)
 - [SDK Usage (Programmatic)](#sdk-usage-programmatic)
 - [API Reference](#api-reference)
 - [Safety Features](#safety-features)
@@ -564,6 +565,51 @@ Before switching from dry-run to live trading on the server:
 - [ ] You have sufficient balance in your MEXC Futures account
 - [ ] You've set a reasonable `MAX_NOTIONAL_PER_TRADE` and `RISK_PERCENT`
 - [ ] Bot auto-restarts on crash (systemd or Docker restart policy)
+
+---
+
+## 🖥️ Desktop App & Auto-Updates
+
+The Electron desktop app wraps the bot with a GUI (configuration, logs, position
+summary) and ships the compiled bot code (`dist/`) inside the app bundle.
+
+It supports **two** update mechanisms, both reachable from the **🔄 Updates** tab:
+
+### 1. App updates (electron-updater)
+- Downloads a newer **app build** from GitHub Releases and installs it.
+- New builds bundle the latest script code, so this is the "big" update path.
+- On macOS the app must be **code-signed** for auto-install to work; otherwise
+  users update manually.
+
+### 2. Script-code refresh (`dist.zip` hot-swap)
+- Pulls just the latest **compiled bot code** from the `dist.zip` release asset
+  and swaps it into a writable runtime folder (`<userData>/code/dist`), then
+  restarts the bot — no reinstall needed.
+- The bot is loaded from this runtime folder when present; otherwise it falls
+  back to the bundled code. Third-party deps resolve from the app's own
+  `node_modules`.
+
+### Building & publishing a release
+
+```bash
+# 1. Bump the version in package.json, then build everything
+npm run build
+
+# 2. Package the compiled bot code for the "Refresh Code" feature
+npm run dist:zip            # creates dist.zip at the repo root
+
+# 3. Build desktop installers and publish to GitHub Releases
+#    (uploads app bundles AND latest*.yml metadata that electron-updater uses)
+npm run desktop:publish     # needs a GH_TOKEN with repo scope
+```
+
+> ⚠️ Attach the generated **`dist.zip`** to the same GitHub release so the
+> desktop app's "Refresh Code" button has something to pull. The asset name
+> must be exactly `dist.zip`.
+
+Update feed: `github.com/dupipcom/iris` releases. `dev-app-update.yml` enables
+update checks during development; the packaged app uses the `app-update.yml`
+electron-builder generates from the `publish` section in `electron-builder.yml`.
 
 ---
 

@@ -8,15 +8,21 @@ let USER_DATA_DIR = "";
 let CONFIG_PATH = "";
 let STATE_PATH = "";
 let LOG_DIR = "";
-let RUNTIME_DIST_DIR = ""; // bundled dist/, may be replaced by an update
 
 function initPaths(): void {
   USER_DATA_DIR = app.getPath("userData");
   CONFIG_PATH = path.join(USER_DATA_DIR, "bot-config.json");
   STATE_PATH = path.join(USER_DATA_DIR, "bot-state.json");
   LOG_DIR = path.join(USER_DATA_DIR, "logs");
-  // Where the app's own compiled bot code ships from (inside app.asar when packaged).
-  RUNTIME_DIST_DIR = AppUpdater.resolveBotCodeDir(
+}
+
+/**
+ * Where to load the bot code from: the writable runtime folder (if a code
+ * refresh has been installed) or the app's own bundled dist/. Resolved fresh
+ * on every start so a refresh is picked up immediately on restart.
+ */
+function getRuntimeDistDir(): string {
+  return AppUpdater.resolveBotCodeDir(
     USER_DATA_DIR,
     path.join(__dirname, "..", "dist")
   );
@@ -135,8 +141,9 @@ async function startBot(): Promise<void> {
 
   hookConsole();
   sendToRenderer("log", "🚀 Starting Dupip Crypto Connector...");
-  if (RUNTIME_DIST_DIR !== path.join(__dirname, "..", "dist")) {
-    sendToRenderer("log", `📦 Running script code from: ${RUNTIME_DIST_DIR}`);
+  const codeDir = getRuntimeDistDir();
+  if (codeDir !== path.join(__dirname, "..", "dist")) {
+    sendToRenderer("log", `📦 Running script code from: ${codeDir}`);
   }
   sendToRenderer("status", "starting");
 
@@ -146,8 +153,8 @@ async function startBot(): Promise<void> {
     AppUpdater.ensureNodeModulesPath(path.join(__dirname, "..", "node_modules"));
 
     // Dynamically import the bot module (runs in-process)
-    const { loadConfig } = require(path.join(RUNTIME_DIST_DIR, "bot", "config"));
-    const { SignalBot } = require(path.join(RUNTIME_DIST_DIR, "bot", "bot"));
+    const { loadConfig } = require(path.join(codeDir, "bot", "config"));
+    const { SignalBot } = require(path.join(codeDir, "bot", "bot"));
 
     const botConfig = loadConfig();
     const bot = new SignalBot(botConfig);
