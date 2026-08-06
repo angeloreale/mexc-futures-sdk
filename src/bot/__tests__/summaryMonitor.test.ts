@@ -84,6 +84,7 @@ describe("PositionSummaryMonitor", () => {
       getAccountAsset: jest.fn(),
       getPlanOrders: jest.fn().mockResolvedValue({ data: [] }),
       getStopOrders: jest.fn().mockResolvedValue({ data: [] }),
+      getPositionHistory: jest.fn().mockResolvedValue({ data: [] }),
       getContractDetail: jest
         .fn()
         .mockImplementation(async (symbol: string) => ({ data: [{ symbol, contractSize: 1 }] })),
@@ -356,6 +357,72 @@ describe("PositionSummaryMonitor", () => {
     expect(pos.estSlPnl).toBeCloseTo(-0.488, 6);
     expect(pos.tpProgress).toBeCloseTo(-0.49, 2);
     expect(pos.slProgress).toBeCloseTo(0.49, 2);
+  });
+
+  it("computes daily PNL from realized history and open-position unrealized PNL", async () => {
+    const now = Date.now();
+    const yesterday = new Date(now - 86400_000).toISOString().slice(0, 10);
+
+    client.getOpenPositions.mockResolvedValue({
+      data: [makePosition({ symbol: "BTC_USDT", positionId: 1, unRealizedPnl: 5, positionType: 1 })],
+    });
+    client.getAccountAsset.mockResolvedValue({
+      data: { availableBalance: 1000, equity: 5000 },
+    });
+    // One position closed today with +10 realized PNL.
+    client.getPositionHistory.mockResolvedValue({
+      data: [
+        makePosition({ symbol: "BTC_USDT", positionId: 99, positionType: 1, realised: 10, updateTime: now }),
+      ],
+    });
+
+    const monitor = makeMonitor(client, store, onSummary, onAlert);
+    // Seed yesterday's snapshot so the day-over-day tick can be exercised.
+    (monitor as any).dailyPnlStore[yesterday] = {
+      realized: 6,
+      unrealized: 0,
+      total: 6,
+      updatedAt: now - 86400_000,
+    };
+    await monitor.emitSummary();
+
+    const dp = onSummary.mock.calls[0][0].dailyPnl;
+    expect(dp.realized).toBeCloseTo(10, 6);
+    expect(dp.unrealized).toBeCloseTo(5, 6);
+    expect(dp.total).toBeCloseTo(15, 6);
+    expect(dp.prevDate).toBe(yesterday);
+    expect(dp.tick).toBeCloseTo(9, 6); // 15 − 6
+  });
+
+  it("ignores pre-today history and reports no tick when no prior day exists", async () => {
+    const now = Date.now();
+    const todayStart = Date.UTC(
+      new Date().getUTCFullYear(),
+      new Date().getUTCMonth(),
+      new Date().getUTCDate()
+    );
+
+    client.getOpenPositions.mockResolvedValue({
+      data: [makePosition({ symbol: "BTC_USDT", positionId: 1, unRealizedPnl: -3, positionType: 1 })],
+    });
+    client.getAccountAsset.mockResolvedValue({
+      data: { availableBalance: 1000, equity: 5000 },
+    });
+    // A close from yesterday must NOT count toward today's realized PNL.
+    client.getPositionHistory.mockResolvedValue({
+      data: [
+        makePosition({ symbol: "BTC_USDT", positionId: 99, positionType: 1, realised: 10, updateTime: todayStart - 3600_000 }),
+      ],
+    });
+
+    const monitor = makeMonitor(client, store, onSummary, onAlert);
+    await monitor.emitSummary();
+
+    const dp = onSummary.mock.calls[0][0].dailyPnl;
+    expect(dp.realized).toBeCloseTo(0, 6);
+    expect(dp.unrealized).toBeCloseTo(-3, 6);
+    expect(dp.total).toBeCloseTo(-3, 6);
+    expect(dp.tick).toBeNull();
   });
 
   // ── SlTpStore prune test ────────────────────────────────────────────

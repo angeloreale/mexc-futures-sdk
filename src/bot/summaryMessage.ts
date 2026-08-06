@@ -86,6 +86,19 @@ export function formatPositionSummaryMessage(summary: PositionSummary): string {
   }
   lines.push(``);
 
+  // ── Daily PNL (realized + unrealized, with day-over-day tick) ─────
+  const dp = summary.dailyPnl;
+  lines.push(`📅 <b>Daily PNL</b> · ${dp.date}`);
+  lines.push(`Realized: <b>${fmtSigned(dp.realized)}</b> ${cur}`);
+  lines.push(`Unrealized: <b>${fmtSigned(dp.unrealized)}</b> ${cur} <i>(open positions)</i>`);
+  const totalStr = Number.isFinite(dp.total) ? fmtSigned(dp.total) : "—";
+  const tickStr =
+    dp.tick !== null && Number.isFinite(dp.tick)
+      ? ` · tick <b>${fmtSigned(dp.tick)}</b> vs ${dp.prevDate ?? "prev day"}`
+      : "";
+  lines.push(`Total: <b>${totalStr}</b> ${cur}${tickStr}`);
+  lines.push(``);
+
   // ── Pending plan orders (TP/SL + trigger entries) ───────────────
   lines.push(`📌 <b>Pending Orders (${summary.pendingOrders.length})</b>`);
   if (summary.pendingOrders.length === 0) {

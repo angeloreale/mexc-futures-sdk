@@ -39,6 +39,14 @@ function makeSummary(overrides?: Partial<PositionSummary>): PositionSummary {
       equity: 5678.9,
       currency: "USDT",
     },
+    dailyPnl: {
+      date: "2026-08-06",
+      realized: 15.2,
+      unrealized: 3.4,
+      total: 18.6,
+      prevDate: "2026-08-05",
+      tick: 4.1,
+    },
     pendingOrders: [],
     ...overrides,
   };
@@ -62,6 +70,34 @@ describe("formatPositionSummaryMessage", () => {
     expect(text).toContain("No pending orders");
     expect(text).toContain("Available: 1,234.56 USDT");
     expect(text).toContain("Equity: 5,678.90 USDT");
+  });
+
+  it("shows daily realized + unrealized PNL and the tick vs the previous day", () => {
+    const text = formatPositionSummaryMessage(makeSummary());
+
+    expect(text).toContain("Daily PNL</b> · 2026-08-06");
+    expect(text).toContain("Realized: <b>+15.20</b> USDT");
+    expect(text).toContain("Unrealized: <b>+3.40</b> USDT");
+    expect(text).toContain("Total: <b>+18.60</b> USDT · tick <b>+4.10</b> vs 2026-08-05");
+  });
+
+  it("hides the daily PNL tick when there is no previous-day data", () => {
+    const text = formatPositionSummaryMessage(
+      makeSummary({
+        dailyPnl: {
+          date: "2026-08-06",
+          realized: -2.5,
+          unrealized: 1.1,
+          total: -1.4,
+          tick: null,
+        },
+      })
+    );
+
+    expect(text).toContain("Realized: <b>-2.50</b> USDT");
+    expect(text).toContain("Unrealized: <b>+1.10</b> USDT");
+    expect(text).toContain("Total: <b>-1.40</b> USDT");
+    expect(text).not.toContain("tick");
   });
 
   it("renders pending STOP entries and TP/SL pairs as single lines", () => {

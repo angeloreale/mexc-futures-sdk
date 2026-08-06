@@ -115,6 +115,33 @@ export interface PositionAlert {
   progress: number;
 }
 
+/**
+ * Daily realized + unrealized PNL figures for the summary, including how the
+ * day's total compares to the previous day's (the "tick").
+ */
+export interface DailyPnlInfo {
+  /** UTC date (YYYY-MM-DD) these figures apply to. */
+  date: string;
+  /** Realized PNL from positions closed that day (net of fees). */
+  realized: number;
+  /** Current unrealized PNL across all open positions. */
+  unrealized: number;
+  /** realized + unrealized. */
+  total: number;
+  /** UTC date (YYYY-MM-DD) of the day used for the tick comparison. */
+  prevDate?: string;
+  /** total − previous day's total (null when no prior-day data is available). */
+  tick: number | null;
+}
+
+/** Persisted daily snapshot (one per UTC day) used for day-over-day ticks. */
+interface DailyPnlEntry {
+  realized: number;
+  unrealized: number;
+  total: number;
+  updatedAt: number;
+}
+
 /** Full data payload produced on each summary emission. */
 export interface PositionSummary {
   /** Trailing window (hours) over which PNL max/min was tracked */
@@ -127,6 +154,8 @@ export interface PositionSummary {
   /** Pending (unfilled) STOP/entry orders, one line each in the summary. */
   pendingOrders: PendingOrderSummary[];
   account: AccountSnapshot;
+  /** Today's realized + unrealized PNL and its change vs the previous day. */
+  dailyPnl: DailyPnlInfo;
 }
 
 export type OnPositionSummary = (summary: PositionSummary) => void;
@@ -202,6 +231,9 @@ export class PositionSummaryMonitor {
   private readonly PENDING_CACHE_TTL_MS = 30_000; // cache pending orders for 30s to avoid rate limits
   /** Cached contract size (price multiplier) per symbol — used to convert between unrealized PNL and price. */
   private contractSizes = new Map<string, number>();
+  /** Daily PNL snapshot per UTC day, persisted to daily-pnl.json in the log dir. */
+  private dailyPnlStore: Record<string, DailyPnlEntry> = {};
+  private dailyPnlFile: string | null = null;
 
   constructor(opts: PositionSummaryMonitorOptions) {
     this.client = opts.client;
@@ -217,6 +249,11 @@ export class PositionSummaryMonitor {
     this.requestSpacingMs = Math.max(0, opts.requestSpacingMs ?? 0);
     this.slTpRetentionMs = Math.max(opts.slTpRetentionDays, 1) * 86400_000;
     this.loadStats();
+    const logDir = (this.logger as any).logDir as string | null | undefined;
+    if (logDir) {
+      this.dailyPnlFile = path.join(logDir, "daily-pnl.json");
+      this.loadDailyPnl();
+    }
   }
 
   /** Start sampling and schedule summary emissions. */
@@ -479,6 +516,10 @@ export class PositionSummaryMonitor {
         };
       }
 
+      // Daily PNL: realized (from position history since UTC midnight) plus
+      // unrealized (current floating PNL across open positions).
+      const dailyPnl = await this.computeDailyPnl(open);
+
       const summary: PositionSummary = {
         windowHours: this.windowMs / 3600000,
         intervalHours: this.intervalMs / 3600000,
@@ -486,6 +527,7 @@ export class PositionSummaryMonitor {
         openPositions,
         pendingOrders,
         account,
+        dailyPnl,
       };
 
       this.logger.info(
@@ -573,6 +615,14 @@ export class PositionSummaryMonitor {
     }
 
     this.logger.info("───────────────────────────────────────────");
+    const dp = summary.dailyPnl;
+    this.logger.info(
+      `  📅 Daily PNL (${dp.date}) · Realized ${fmtS(dp.realized)} / ` +
+        `Unrealized ${fmtS(dp.unrealized)} / Total ${fmtS(dp.total)} ${cur}` +
+        (dp.tick !== null && Number.isFinite(dp.tick)
+          ? ` · tick ${fmtS(dp.tick)} vs ${dp.prevDate ?? "prev day"}`
+          : "")
+    );
     this.logger.info(`  💼 Available: ${fmtN(summary.account.availableBalance)} ${cur}`);
     this.logger.info(`  📈 Equity: ${fmtN(summary.account.equity)} ${cur}`);
     this.logger.info("═══════════════════════════════════════════");
@@ -681,6 +731,175 @@ export class PositionSummaryMonitor {
   private dateStr(ms?: number): string {
     const d = ms ? new Date(ms) : new Date();
     return d.toISOString().slice(0, 10);
+  }
+
+  // ── Daily PNL helpers ─────────────────────────────────────────────
+
+  /**
+   * Compute today's realized + unrealized PNL and the change ("tick") versus
+   * the previous day. Realized is summed from the position-history endpoint
+   * (positions closed since UTC midnight); unrealized is the current floating
+   * PNL across open positions. Today's snapshot is persisted so the tick can
+   * be derived on later runs.
+   */
+  private async computeDailyPnl(open: Position[]): Promise<DailyPnlInfo> {
+    const now = Date.now();
+    const today = this.dateStr(now);
+    const yesterday = this.dateStr(now - 86400_000);
+    const todayStart = Date.UTC(
+      new Date().getUTCFullYear(),
+      new Date().getUTCMonth(),
+      new Date().getUTCDate()
+    );
+
+    // Unrealized = current floating PNL across all open positions.
+    let unrealized = 0;
+    let unrealizedKnown = false;
+    for (const p of open) {
+      const u = toFiniteNumber(p.unRealizedPnl);
+      if (Number.isFinite(u)) {
+        unrealized += u;
+        unrealizedKnown = true;
+      }
+    }
+
+    // Realized = sum of realised PNL from positions closed since UTC midnight.
+    let realized = NaN;
+    try {
+      realized = await this.sumRealizedSince(todayStart);
+    } catch (error) {
+      this.logger.warn(
+        "⚠️ Failed to fetch position history for daily realized PNL:",
+        error instanceof Error ? error.message : error
+      );
+    }
+
+    const realizedFinite = Number.isFinite(realized);
+    const total =
+      realizedFinite && unrealizedKnown ? realized + unrealized : NaN;
+    const prev = this.dailyPnlStore[yesterday];
+    const tick =
+      prev && Number.isFinite(prev.total) && Number.isFinite(total)
+        ? total - prev.total
+        : null;
+
+    // Persist today's running snapshot, falling back to the previous value on
+    // a failed read so a transient error doesn't zero out the store.
+    const existing = this.dailyPnlStore[today];
+    const storedRealized = realizedFinite ? realized : existing?.realized ?? 0;
+    const storedUnrealized = unrealizedKnown
+      ? unrealized
+      : existing?.unrealized ?? 0;
+    this.dailyPnlStore[today] = {
+      realized: storedRealized,
+      unrealized: storedUnrealized,
+      total: storedRealized + storedUnrealized,
+      updatedAt: now,
+    };
+    this.pruneDailyPnl();
+    this.saveDailyPnl();
+
+    return {
+      date: today,
+      prevDate: prev ? yesterday : undefined,
+      realized: realizedFinite ? realized : NaN,
+      unrealized: unrealizedKnown ? unrealized : NaN,
+      total: Number.isFinite(total) ? total : NaN,
+      tick,
+    };
+  }
+
+  /**
+   * Sum the realized PNL of every position closed since `startMs` by reading
+   * the position-history endpoint (newest-first). Stops early once a full page
+   * predates `startMs` or history is exhausted. Dedupes by positionId keeping
+   * the latest record, since a position can appear more than once.
+   */
+  private async sumRealizedSince(startMs: number): Promise<number> {
+    const byId = new Map<string, { realised: number; ts: number }>();
+    const pageSize = 100;
+    const maxPages = 5;
+
+    for (let page = 1; page <= maxPages; page++) {
+      await this.spaceRequest();
+      const res = await this.client.getPositionHistory({
+        page_num: page,
+        page_size: pageSize,
+      });
+      const list: Position[] = Array.isArray(res.data) ? res.data : [];
+      if (list.length === 0) break;
+
+      // Newest-first heuristic: if the newest record on this page already
+      // predates today, no later page will contain today's closes either.
+      let newest = 0;
+      for (const p of list) {
+        const ts = toFiniteNumber(p.updateTime);
+        if (Number.isFinite(ts) && ts > newest) newest = ts;
+      }
+      if (newest < startMs) break;
+
+      for (const p of list) {
+        const ts = toFiniteNumber(p.updateTime);
+        const realised = toFiniteNumber(p.realised);
+        if (!Number.isFinite(ts) || ts < startMs || !Number.isFinite(realised)) {
+          continue;
+        }
+        const id = String(p.positionId);
+        const prev = byId.get(id);
+        if (!prev || ts >= prev.ts) byId.set(id, { realised, ts });
+      }
+
+      if (list.length < pageSize) break;
+    }
+
+    let total = 0;
+    for (const v of byId.values()) total += v.realised;
+    return total;
+  }
+
+  private loadDailyPnl(): void {
+    if (!this.dailyPnlFile) return;
+    try {
+      if (fs.existsSync(this.dailyPnlFile)) {
+        const raw = fs.readFileSync(this.dailyPnlFile, "utf-8");
+        const data = JSON.parse(raw);
+        if (
+          data &&
+          typeof data === "object" &&
+          data.days &&
+          typeof data.days === "object"
+        ) {
+          this.dailyPnlStore = data.days;
+        }
+      }
+    } catch (error) {
+      this.logger.warn("⚠️ Could not load daily PNL store — starting fresh");
+    }
+  }
+
+  private saveDailyPnl(): void {
+    if (!this.dailyPnlFile) return;
+    try {
+      fs.mkdirSync(path.dirname(this.dailyPnlFile), { recursive: true });
+      fs.writeFileSync(
+        this.dailyPnlFile,
+        JSON.stringify({
+          days: this.dailyPnlStore,
+          updatedAt: new Date().toISOString(),
+        }),
+        "utf-8"
+      );
+    } catch (error) {
+      this.logger.error("❌ Failed to persist daily PNL:", error);
+    }
+  }
+
+  /** Keep only the most recent 7 days of daily PNL snapshots. */
+  private pruneDailyPnl(): void {
+    const cutoff = this.dateStr(Date.now() - 7 * 86400_000);
+    for (const d of Object.keys(this.dailyPnlStore)) {
+      if (d < cutoff) delete this.dailyPnlStore[d];
+    }
   }
 
   /**
