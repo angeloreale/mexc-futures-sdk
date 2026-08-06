@@ -57,7 +57,7 @@ export interface OpenPositionSummary {
   realisedPnl: number;
   /** Holding/funding fee accrued on the position (negative = paid, from MEXC `holdFee`). */
   holdFee: number;
-  /** Estimated settlement PNL if the position were closed right now (floating PNL − realized PNL). */
+  /** Estimated settlement PNL if the position were closed right now (floating PNL + realized PNL). */
   totalPnl: number;
   /** Estimated PNL if the position reaches its TP target (quote currency). */
   estTpPnl?: number;
@@ -475,8 +475,10 @@ export class PositionSummaryMonitor {
           realisedPnl: toFiniteNumber(p.realised),
           holdFee: toFiniteNumber(p.holdFee),
           // What the position would settle for if closed right now:
-          // floating (unrealized) PNL minus the realized PNL already booked.
-          totalPnl: currentPnl - toFiniteNumber(p.realised),
+          // floating (unrealized) PNL plus the realized PNL already booked.
+          // `realised` is signed (negative = net loss / fees), so the sum
+          // correctly nets fees out of the total.
+          totalPnl: currentPnl + toFiniteNumber(p.realised),
         };
       });
 

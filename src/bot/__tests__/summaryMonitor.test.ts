@@ -158,7 +158,7 @@ describe("PositionSummaryMonitor", () => {
     expect(onSummary.mock.calls[0][0].account.availableBalance).toBe(1234.56);
   });
 
-  it("computes total PNL as floating PNL minus realized PNL", async () => {
+  it("computes total PNL as floating PNL plus realized PNL", async () => {
     client.getOpenPositions.mockResolvedValue({
       data: [makePosition({ unRealizedPnl: 176.7, realised: 15.2 })],
     });
@@ -172,7 +172,7 @@ describe("PositionSummaryMonitor", () => {
     const pos = onSummary.mock.calls[0][0].openPositions[0];
     expect(pos.currentPnl).toBe(176.7); // floating PNL
     expect(pos.realisedPnl).toBe(15.2); // realized PNL
-    expect(pos.totalPnl).toBeCloseTo(161.5, 6); // floating − realized
+    expect(pos.totalPnl).toBeCloseTo(191.9, 6); // floating + realized
   });
 
   // ── Alert tests ─────────────────────────────────────────────────────

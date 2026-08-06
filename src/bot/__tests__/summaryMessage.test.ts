@@ -21,7 +21,7 @@ function makeSummary(overrides?: Partial<PositionSummary>): PositionSummary {
         holdVol: 1,
         realisedPnl: 15.2,
         holdFee: -2.1,
-        totalPnl: 161.5,
+        totalPnl: 191.9,
       },
       {
         positionId: "2",
@@ -37,7 +37,7 @@ function makeSummary(overrides?: Partial<PositionSummary>): PositionSummary {
         holdVol: 1,
         realisedPnl: -3.5,
         holdFee: -0.9,
-        totalPnl: -8.5,
+        totalPnl: -15.5,
       },
     ],
     account: {
@@ -72,8 +72,8 @@ describe("formatPositionSummaryMessage", () => {
     expect(text).toContain("max +210.10 / min -5.30 USDT");
     expect(text).toContain("💸 Realized: <b>+15.20</b> USDT · Fees: <b>-2.10</b> USDT");
     expect(text).toContain("💸 Realized: <b>-3.50</b> USDT · Fees: <b>-0.90</b> USDT");
-    expect(text).toContain("🧾 Total PNL (close now): <b>+161.50</b> USDT");
-    expect(text).toContain("🧾 Total PNL (close now): <b>-8.50</b> USDT");
+    expect(text).toContain("🧾 Total PNL (close now): <b>+191.90</b> USDT");
+    expect(text).toContain("🧾 Total PNL (close now): <b>-15.50</b> USDT");
     expect(text).toContain("ETH_USDT</b> SHORT · 5x");
     expect(text).toContain("PNL: <b>-12.00 USDT</b>");
     expect(text).toContain("Pending Orders (0)");
@@ -184,7 +184,7 @@ describe("formatPositionSummaryMessage", () => {
             holdVol: 1,
             realisedPnl: 15.2,
             holdFee: -2.1,
-            totalPnl: 161.5,
+            totalPnl: 191.9,
             estTpPnl: 1039.41,
             estSlPnl: -566.0,
             tpProgress: 0.17,
@@ -204,7 +204,7 @@ describe("formatPositionSummaryMessage", () => {
             holdVol: 1,
             realisedPnl: -3.5,
             holdFee: -0.9,
-            totalPnl: -8.5,
+            totalPnl: -15.5,
             estTpPnl: 53.2,
             estSlPnl: -50.0,
             tpProgress: -0.23,
