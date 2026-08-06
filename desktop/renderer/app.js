@@ -32,6 +32,21 @@ var logOutput = document.getElementById("log-output");
 var personaToggle = document.getElementById("persona-toggle");
 var providerFields = document.getElementById("provider-fields");
 
+// ── Update UI Elements ──────────────────────────
+var updAppCurrent = document.getElementById("update-app-current");
+var updAppLatest = document.getElementById("update-app-latest");
+var updAppLatestWrap = document.getElementById("update-app-latest-wrap");
+var updAppStatus = document.getElementById("update-app-status");
+var updCodeCurrent = document.getElementById("update-code-current");
+var updCodeLatest = document.getElementById("update-code-latest");
+var updCodeLatestWrap = document.getElementById("update-code-latest-wrap");
+var updCodeStatus = document.getElementById("update-code-status");
+var btnCheckApp = document.getElementById("btn-check-app");
+var btnDownloadApp = document.getElementById("btn-download-app");
+var btnInstallApp = document.getElementById("btn-install-app");
+var btnCheckCode = document.getElementById("btn-check-code");
+var btnRefreshCode = document.getElementById("btn-refresh-code");
+
 // ── Tab Switching ──────────────────────────────
 var tabs = document.querySelectorAll(".tab");
 var tabContents = document.querySelectorAll(".tab-content");
@@ -217,9 +232,77 @@ api.onBotEvent(function (event) {
   }
 });
 
+// ── Updates ─────────────────────────────────────
+function renderUpdateInfo(info) {
+  if (!info) return;
+
+  updAppCurrent.textContent = info.appVersion || "—";
+  if (info.latestAppVersion) {
+    updAppLatest.textContent = info.latestAppVersion;
+    updAppLatestWrap.style.display = "";
+  } else {
+    updAppLatestWrap.style.display = "none";
+  }
+
+  updCodeCurrent.textContent = info.codeVersion || "Bundled";
+  if (info.latestCodeVersion) {
+    updCodeLatest.textContent = info.latestCodeVersion;
+    updCodeLatestWrap.style.display = "";
+  } else {
+    updCodeLatestWrap.style.display = "none";
+  }
+
+  var msg = info.message || "Idle.";
+  updAppStatus.textContent = msg;
+  updCodeStatus.textContent = msg;
+
+  var appBusy = info.state === "checking-app" || info.state === "downloading-app";
+  btnCheckApp.disabled = appBusy;
+  btnDownloadApp.disabled = info.state !== "app-available" || appBusy;
+  btnInstallApp.disabled = info.state !== "app-downloaded";
+
+  var codeBusy = info.state === "checking-code" || info.state === "refreshing-code";
+  btnCheckCode.disabled = codeBusy;
+  btnRefreshCode.disabled = info.state !== "code-available" || codeBusy;
+}
+
+btnCheckApp.addEventListener("click", function () {
+  api.checkAppUpdate().then(renderUpdateInfo).catch(function (e) { console.error(e); });
+});
+btnDownloadApp.addEventListener("click", function () {
+  api.downloadAppUpdate().then(renderUpdateInfo).catch(function (e) { console.error(e); });
+});
+btnInstallApp.addEventListener("click", function () {
+  api.installAppUpdate().catch(function (e) { console.error(e); });
+});
+btnCheckCode.addEventListener("click", function () {
+  api.checkCodeUpdate().then(renderUpdateInfo).catch(function (e) { console.error(e); });
+});
+btnRefreshCode.addEventListener("click", function () {
+  btnRefreshCode.disabled = true;
+  btnRefreshCode.textContent = "⏳ Refreshing…";
+  api.refreshCode().then(function (res) {
+    btnRefreshCode.textContent = "⬇️ Refresh Code & Restart Bot";
+    if (res && res.info) renderUpdateInfo(res.info);
+    if (res && res.message) appendLog(res.message);
+  }).catch(function (e) {
+    btnRefreshCode.textContent = "⬇️ Refresh Code & Restart Bot";
+    console.error(e);
+    appendLog("❌ Refresh failed: " + e.message);
+  });
+});
+
+// Live progress/status pushes from the main process.
+api.onUpdateEvent(function (event) {
+  try {
+    renderUpdateInfo(JSON.parse(event.data));
+  } catch (e) { /* ignore malformed payloads */ }
+});
+
 // ── Init ────────────────────────────────────────
 (function () {
   loadConfig();
+  api.getUpdateInfo().then(renderUpdateInfo).catch(function (e) { console.error(e); });
   api.getBotStatus().then(function (status) {
     setStatus(status);
     if (status === "running") {

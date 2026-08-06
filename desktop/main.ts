@@ -1,23 +1,31 @@
 import { app, BrowserWindow, ipcMain, shell } from "electron";
 import * as path from "path";
 import * as fs from "fs";
+import { AppUpdater } from "./updater";
 
 // ── Paths (lazy-initialized after app is ready) ──
 let USER_DATA_DIR = "";
 let CONFIG_PATH = "";
 let STATE_PATH = "";
 let LOG_DIR = "";
+let RUNTIME_DIST_DIR = ""; // bundled dist/, may be replaced by an update
 
 function initPaths(): void {
   USER_DATA_DIR = app.getPath("userData");
   CONFIG_PATH = path.join(USER_DATA_DIR, "bot-config.json");
   STATE_PATH = path.join(USER_DATA_DIR, "bot-state.json");
   LOG_DIR = path.join(USER_DATA_DIR, "logs");
+  // Where the app's own compiled bot code ships from (inside app.asar when packaged).
+  RUNTIME_DIST_DIR = AppUpdater.resolveBotCodeDir(
+    USER_DATA_DIR,
+    path.join(__dirname, "..", "dist")
+  );
 }
 
 let mainWindow: BrowserWindow | null = null;
 let botInstance: { stop?: () => void } | null = null;
 let botRunning = false;
+let updater: AppUpdater | null = null;
 
 function getConfig(): Record<string, string> {
   try {
@@ -127,12 +135,19 @@ async function startBot(): Promise<void> {
 
   hookConsole();
   sendToRenderer("log", "🚀 Starting Dupip Crypto Connector...");
+  if (RUNTIME_DIST_DIR !== path.join(__dirname, "..", "dist")) {
+    sendToRenderer("log", `📦 Running script code from: ${RUNTIME_DIST_DIR}`);
+  }
   sendToRenderer("status", "starting");
 
   try {
+    // Make the bot's third-party deps (axios, telegraf, …) resolvable even
+    // when its code lives in the writable runtime folder instead of the asar.
+    AppUpdater.ensureNodeModulesPath(path.join(__dirname, "..", "node_modules"));
+
     // Dynamically import the bot module (runs in-process)
-    const { loadConfig } = require("../dist/bot/config");
-    const { SignalBot } = require("../dist/bot/bot");
+    const { loadConfig } = require(path.join(RUNTIME_DIST_DIR, "bot", "config"));
+    const { SignalBot } = require(path.join(RUNTIME_DIST_DIR, "bot", "bot"));
 
     const botConfig = loadConfig();
     const bot = new SignalBot(botConfig);
@@ -204,12 +219,56 @@ function setupIPC(): void {
   ipcMain.handle("open-config-dir", () => {
     shell.openPath(USER_DATA_DIR);
   });
+
+  // ── Update IPC ────────────────────────────────────
+  ipcMain.handle("get-update-info", () => updater?.getInfo() ?? null);
+
+  ipcMain.handle("check-app-update", async () => {
+    await updater?.checkAppUpdate();
+    return updater?.getInfo() ?? null;
+  });
+
+  ipcMain.handle("download-app-update", () => {
+    updater?.downloadAppUpdate();
+    return updater?.getInfo() ?? null;
+  });
+
+  ipcMain.handle("install-app-update", () => {
+    updater?.installAppUpdate();
+    return { ok: true };
+  });
+
+  ipcMain.handle("check-code-update", async () => {
+    await updater?.checkCodeUpdate();
+    return updater?.getInfo() ?? null;
+  });
+
+  ipcMain.handle("refresh-code", async () => {
+    if (!updater) return { ok: false, message: "Updater not initialised.", info: null };
+    const res = await updater.refreshCode({
+      isBotRunning: () => botRunning,
+      stopBot,
+      startBot,
+    });
+    return { ...res, info: updater.getInfo() };
+  });
 }
 
 // ── App Lifecycle ────────────────────────────────
 app.whenReady().then(() => {
   initPaths();
   setupIPC();
+
+  updater = new AppUpdater({
+    userDataDir: USER_DATA_DIR,
+    appVersion: app.getVersion(),
+    send: (channel, data) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("update-event", { channel, data });
+      }
+    },
+  });
+
   createWindow();
 
   app.on("activate", () => {

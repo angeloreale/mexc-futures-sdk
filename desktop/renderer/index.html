@@ -25,6 +25,7 @@
   <nav id="tab-bar">
     <button class="tab active" data-tab="config">⚙️ Configuration</button>
     <button class="tab" data-tab="logs">📋 Logs</button>
+    <button class="tab" data-tab="updates">🔄 Updates</button>
     <button class="tab" data-tab="about">ℹ️ About</button>
   </nav>
 
@@ -243,6 +244,51 @@
     </div>
     <div id="log-output" class="console">
       <div class="log-line muted">Bot logs will appear here after starting...</div>
+    </div>
+  </section>
+
+  <!-- Updates Tab -->
+  <section id="tab-updates" class="tab-content">
+    <div class="updates-wrap">
+
+      <!-- Full App Update -->
+      <div class="about-card">
+        <h2>🔄 App Updates</h2>
+        <p class="version">
+          Current: <b id="update-app-current">…</b>
+          <span id="update-app-latest-wrap" style="display:none;"> · Latest: <b id="update-app-latest">…</b></span>
+        </p>
+        <p id="update-app-status" class="muted">Idle.</p>
+        <div class="update-actions">
+          <button type="button" id="btn-check-app" class="btn">🔍 Check for Updates</button>
+          <button type="button" id="btn-download-app" class="btn btn-primary" disabled>⬇️ Download Update</button>
+          <button type="button" id="btn-install-app" class="btn btn-success" disabled>♻️ Install &amp; Restart</button>
+        </div>
+        <p class="muted" style="margin-top:10px;">
+          Downloads a new app build from GitHub Releases. New builds bundle the latest
+          script code. Requires a signed build on macOS to auto-install.
+        </p>
+      </div>
+
+      <!-- Script Code Update -->
+      <div class="about-card">
+        <h2>📦 Script Code Updates</h2>
+        <p class="version">
+          Current: <b id="update-code-current">…</b>
+          <span id="update-code-latest-wrap" style="display:none;"> · Latest: <b id="update-code-latest">…</b></span>
+        </p>
+        <p id="update-code-status" class="muted">Idle.</p>
+        <div class="update-actions">
+          <button type="button" id="btn-check-code" class="btn">🔍 Check for Code Updates</button>
+          <button type="button" id="btn-refresh-code" class="btn btn-primary" disabled>⬇️ Refresh Code &amp; Restart Bot</button>
+        </div>
+        <p class="muted" style="margin-top:10px;">
+          Pulls the latest compiled bot code (<code>dist.zip</code>) from the
+          <code>dupipcom/iris</code> GitHub release and swaps it in without
+          reinstalling the app. The bot is restarted automatically if running.
+        </p>
+      </div>
+
     </div>
   </section>
 

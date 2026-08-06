@@ -36,20 +36,25 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
 const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
+const updater_1 = require("./updater");
 // ── Paths (lazy-initialized after app is ready) ──
 let USER_DATA_DIR = "";
 let CONFIG_PATH = "";
 let STATE_PATH = "";
 let LOG_DIR = "";
+let RUNTIME_DIST_DIR = ""; // bundled dist/, may be replaced by an update
 function initPaths() {
     USER_DATA_DIR = electron_1.app.getPath("userData");
     CONFIG_PATH = path.join(USER_DATA_DIR, "bot-config.json");
     STATE_PATH = path.join(USER_DATA_DIR, "bot-state.json");
     LOG_DIR = path.join(USER_DATA_DIR, "logs");
+    // Where the app's own compiled bot code ships from (inside app.asar when packaged).
+    RUNTIME_DIST_DIR = updater_1.AppUpdater.resolveBotCodeDir(USER_DATA_DIR, path.join(__dirname, "..", "dist"));
 }
 let mainWindow = null;
 let botInstance = null;
 let botRunning = false;
+let updater = null;
 function getConfig() {
     try {
         if (fs.existsSync(CONFIG_PATH)) {
@@ -146,11 +151,17 @@ async function startBot() {
     process.env.LOG_DIR = LOG_DIR;
     hookConsole();
     sendToRenderer("log", "🚀 Starting Dupip Crypto Connector...");
+    if (RUNTIME_DIST_DIR !== path.join(__dirname, "..", "dist")) {
+        sendToRenderer("log", `📦 Running script code from: ${RUNTIME_DIST_DIR}`);
+    }
     sendToRenderer("status", "starting");
     try {
+        // Make the bot's third-party deps (axios, telegraf, …) resolvable even
+        // when its code lives in the writable runtime folder instead of the asar.
+        updater_1.AppUpdater.ensureNodeModulesPath(path.join(__dirname, "..", "node_modules"));
         // Dynamically import the bot module (runs in-process)
-        const { loadConfig } = require("../dist/bot/config");
-        const { SignalBot } = require("../dist/bot/bot");
+        const { loadConfig } = require(path.join(RUNTIME_DIST_DIR, "bot", "config"));
+        const { SignalBot } = require(path.join(RUNTIME_DIST_DIR, "bot", "bot"));
         const botConfig = loadConfig();
         const bot = new SignalBot(botConfig);
         await bot.start();
@@ -209,11 +220,48 @@ function setupIPC() {
     electron_1.ipcMain.handle("open-config-dir", () => {
         electron_1.shell.openPath(USER_DATA_DIR);
     });
+    // ── Update IPC ────────────────────────────────────
+    electron_1.ipcMain.handle("get-update-info", () => updater?.getInfo() ?? null);
+    electron_1.ipcMain.handle("check-app-update", async () => {
+        await updater?.checkAppUpdate();
+        return updater?.getInfo() ?? null;
+    });
+    electron_1.ipcMain.handle("download-app-update", () => {
+        updater?.downloadAppUpdate();
+        return updater?.getInfo() ?? null;
+    });
+    electron_1.ipcMain.handle("install-app-update", () => {
+        updater?.installAppUpdate();
+        return { ok: true };
+    });
+    electron_1.ipcMain.handle("check-code-update", async () => {
+        await updater?.checkCodeUpdate();
+        return updater?.getInfo() ?? null;
+    });
+    electron_1.ipcMain.handle("refresh-code", async () => {
+        if (!updater)
+            return { ok: false, message: "Updater not initialised.", info: null };
+        const res = await updater.refreshCode({
+            isBotRunning: () => botRunning,
+            stopBot,
+            startBot,
+        });
+        return { ...res, info: updater.getInfo() };
+    });
 }
 // ── App Lifecycle ────────────────────────────────
 electron_1.app.whenReady().then(() => {
     initPaths();
     setupIPC();
+    updater = new updater_1.AppUpdater({
+        userDataDir: USER_DATA_DIR,
+        appVersion: electron_1.app.getVersion(),
+        send: (channel, data) => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send("update-event", { channel, data });
+            }
+        },
+    });
     createWindow();
     electron_1.app.on("activate", () => {
         if (electron_1.BrowserWindow.getAllWindows().length === 0)

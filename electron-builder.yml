@@ -2,6 +2,12 @@ appId: com.dupip.invest.connector
 productName: Dupip Invest Connector
 copyright: Copyright © 2026 Dupip
 
+# Where the desktop app checks for and downloads updates from.
+publish:
+  provider: github
+  owner: dupipcom
+  repo: iris
+
 directories:
   output: release
 
@@ -31,6 +37,7 @@ win:
     - portable
   icon: desktop/renderer/icon.png
   artifactName: ${productName}-${version}-win.${ext}
+  defaultArch: x64
 
 linux:
   target:

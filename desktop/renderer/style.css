@@ -283,6 +283,32 @@ input[type="password"] { font-family: monospace; }
   align-items: flex-start;
 }
 #tab-about.active { display: flex; }
+
+/* ── Updates tab ─────────────────────────────── */
+#tab-updates {
+  padding: 20px;
+  display: none;
+  flex-direction: column;
+  align-items: flex-start;
+}
+#tab-updates.active { display: flex; }
+.updates-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  align-items: flex-start;
+  width: 100%;
+}
+.updates-wrap .about-card {
+  max-width: 560px;
+  width: 100%;
+}
+.update-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
 .about-card {
   max-width: 550px;
   background: var(--bg-card);

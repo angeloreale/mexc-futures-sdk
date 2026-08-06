@@ -27,5 +27,25 @@ electron_1.contextBridge.exposeInMainWorld("botAPI", {
         // Return an unsubscribe function
         return () => electron_1.ipcRenderer.removeListener("bot-event", handler);
     },
+    // ── Updates ──────────────────────────────────────
+    /** Current update snapshot (app version, latest versions, state) */
+    getUpdateInfo: () => electron_1.ipcRenderer.invoke("get-update-info"),
+    /** Check GitHub Releases for a newer app build */
+    checkAppUpdate: () => electron_1.ipcRenderer.invoke("check-app-update"),
+    /** Start downloading the available app update */
+    downloadAppUpdate: () => electron_1.ipcRenderer.invoke("download-app-update"),
+    /** Quit and install the downloaded app update */
+    installAppUpdate: () => electron_1.ipcRenderer.invoke("install-app-update"),
+    /** Check GitHub for a newer script-code bundle (dist.zip) */
+    checkCodeUpdate: () => electron_1.ipcRenderer.invoke("check-code-update"),
+    /** Download + swap in the latest script code, restarting the bot if running */
+    refreshCode: () => electron_1.ipcRenderer.invoke("refresh-code"),
+    /** Listen for update progress/status events */
+    onUpdateEvent: (callback) => {
+        const handler = (_event, payload) => callback(payload);
+        electron_1.ipcRenderer.on("update-event", handler);
+        // Return an unsubscribe function
+        return () => electron_1.ipcRenderer.removeListener("update-event", handler);
+    },
 });
 //# sourceMappingURL=preload.js.map
