@@ -118,6 +118,49 @@ export interface SubmitOrderResponse {
   data?: string | number; // Order ID — large ids exceed 2^53 and are returned as exact strings; use String(data)
 }
 
+// ── Stop-Limit (TP/SL) Placement ─────────────────────────────────
+// MEXC endpoint: POST /api/v1/private/stoporder/place
+// Places a take-profit and/or stop-loss order against an EXISTING open
+// position (identified by positionId). This is how MEXC supports LIMIT
+// (maker) TP/SL: set takeProfitType/stopLossType = 1 and provide the
+// takeProfitOrderPrice/stopLossOrderPrice limit price. When those *_type
+// fields are omitted (or 0), the TP/SL executes as a market (taker) order.
+
+export interface SubmitStopOrderRequest {
+  /** Contract symbol (e.g. "BTC_USDT"). */
+  symbol: string;
+  /** Position ID of the open position to attach the TP/SL to. */
+  positionId: number | string;
+  /** Quantity (contracts) the TP/SL applies to. */
+  vol: number;
+  /** Stop-loss trigger price type: 1=latest (default), 2=fair, 3=index. */
+  lossTrend?: 1 | 2 | 3;
+  /** Take-profit trigger price type: 1=latest (default), 2=fair, 3=index. */
+  profitTrend?: 1 | 2 | 3;
+  /** Stop-loss trigger price. */
+  stopLossPrice?: number;
+  /** Stop-loss execution type: 0=market (default), 1=limit (maker). */
+  stopLossType?: 0 | 1;
+  /** Limit order price used when stopLossType=1. */
+  stopLossOrderPrice?: number;
+  /** Take-profit trigger price. */
+  takeProfitPrice?: number;
+  /** Take-profit execution type: 0=market (default), 1=limit (maker). */
+  takeProfitType?: 0 | 1;
+  /** Limit order price used when takeProfitType=1. */
+  takeProfitOrderPrice?: number;
+  /** Conditional-order trigger protection: 0 disabled (default), 1 enabled. */
+  priceProtect?: 0 | 1;
+}
+
+export interface SubmitStopOrderResponse {
+  success: boolean;
+  code: number;
+  message?: string;
+  /** Stop-order ID — large ids exceed 2^53, use String(). */
+  data?: string | number;
+}
+
 // ── Trigger (Plan) Order List ──────────────────────────────────────
 // MEXC endpoint: GET /api/v1/private/planorder/list/orders
 // Returns plan/trigger orders (stop entries). Filter with `states`:

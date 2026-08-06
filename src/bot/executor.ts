@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { MexcFuturesSDK } from "../client";
-import { SubmitOrderRequest, SubmitOrderResponse, SubmitPlanOrderRequest } from "../types/orders";
+import { SubmitOrderRequest, SubmitOrderResponse, SubmitPlanOrderRequest, SubmitStopOrderRequest } from "../types/orders";
 import { Position } from "../types/account";
 import { BotConfig, ResolvedTrade, TradeRecord } from "./types";
 import { Logger } from "../utils/logger";
@@ -42,6 +42,11 @@ export class TradeExecutor {
       this.logger.info(
         `   Risk: ${trade.riskAmount.toFixed(2)} USDT (${(trade.riskPercent * 100).toFixed(1)}% of ${trade.equity.toFixed(2)})`
       );
+      if (this.config.useLimitTpSl) {
+        this.logger.info(
+          `   🛡️ TP/SL mode: LIMIT (Maker) via /stoporder/place${trade.signal.orderType === "trigger" ? " — not applicable to stop-entry orders, market TP/SL will be used" : ""}`
+        );
+      }
 
       const record: TradeRecord = {
         resolved: trade,
@@ -293,6 +298,11 @@ export class TradeExecutor {
     const externalOid = `tg_${hash}`;
 
     if (isTrigger) {
+      if (this.config.useLimitTpSl) {
+        this.logger.warn(
+          `⚠️ USE_LIMIT_TP_SL is enabled, but stop-entry (plan) orders can't attach limit TP/SL until the position actually opens — keeping MARKET TP/SL for ${trade.mexcSymbol} trigger order (limit TP/SL applies to market entries).`
+        );
+      }
       const isBuy = trade.side === 1;
       const entry = trade.entry;
       const cp = trade.currentPrice;
@@ -361,6 +371,7 @@ export class TradeExecutor {
     }
 
     // Market order — immediate fill
+    const useLimitTpSl = this.config.useLimitTpSl;
     const orderParams: SubmitOrderRequest = {
       symbol: trade.mexcSymbol,
       price: trade.entry,
@@ -369,20 +380,187 @@ export class TradeExecutor {
       type: 5, // market
       openType: trade.openType,
       leverage: trade.leverage,
-      stopLossPrice: trade.stopLossPrice,
-      takeProfitPrice: takeProfitPrice,
+      // In Limit (maker) TP/SL mode we do NOT attach TP/SL to the entry order —
+      // they are placed afterwards as Stop-Limit orders (see below). Otherwise
+      // MEXC would create MARKET (taker) TP/SL, which is what we're avoiding.
+      ...(useLimitTpSl
+        ? {}
+        : { stopLossPrice: trade.stopLossPrice, takeProfitPrice }),
       externalOid,
     };
 
     this.logger.info(
-      `🚀 Market order: ${trade.mexcSymbol} ${trade.side === 1 ? "LONG" : "SHORT"} price=${trade.entry} vol=${volume} SL=${trade.stopLossPrice} TP=${takeProfitPrice}`
+      `🚀 Market order: ${trade.mexcSymbol} ${trade.side === 1 ? "LONG" : "SHORT"} price=${trade.entry} vol=${volume}` +
+      (useLimitTpSl
+        ? ` — TP/SL to be attached as LIMIT (maker) orders`
+        : ` SL=${trade.stopLossPrice} TP=${takeProfitPrice}`)
     );
 
     try {
       const response: SubmitOrderResponse = await this.client.submitOrder(orderParams);
-      return this.toTradeRecord(trade, response, volume, takeProfitPrice);
+      const record = this.toTradeRecord(trade, response, volume, takeProfitPrice);
+
+      // Limit (maker) TP/SL mode: the entry order was submitted WITHOUT attached
+      // TP/SL, so now attach Stop-Limit TP + SL to the opened position.
+      if (useLimitTpSl && record.success && record.orderId && record.orderId !== "unknown") {
+        await this.attachLimitTpSlAfterFill(trade, volume, takeProfitPrice, record.orderId);
+      }
+      return record;
     } catch (error) {
       return this.toErrorRecord(trade, error, volume, takeProfitPrice);
+    }
+  }
+
+  /**
+   * Attach Stop-Limit (maker) TP/SL orders to the position just opened by a
+   * market entry order. Used when USE_LIMIT_TP_SL is enabled.
+   *
+   * The entry order was submitted WITHOUT attached TP/SL, so we now place the
+   * take-profit and stop-loss as LIMIT orders via /stoporder/place. If a limit
+   * placement fails we fall back to a MARKET TP/SL through the same endpoint so
+   * the position is never left unprotected.
+   */
+  private async attachLimitTpSlAfterFill(
+    trade: ResolvedTrade,
+    volume: number,
+    takeProfitPrice: number,
+    orderId: string
+  ): Promise<void> {
+    const positionType: 1 | 2 = trade.side === 1 ? 1 : 2;
+
+    const positionId = await this.resolvePositionId(trade.mexcSymbol, positionType, orderId);
+    if (!positionId) {
+      this.logger.error(
+        `❌ USE_LIMIT_TP_SL: could not resolve positionId for ${trade.mexcSymbol} (order ${orderId}) — TP/SL NOT placed! Close the position manually or set SL/TP in the MEXC UI.`
+      );
+      return;
+    }
+
+    // 1) Stop-loss FIRST (protect the downside), then take-profit.
+    const slPlaced = await this.placeStopOrder(
+      {
+        symbol: trade.mexcSymbol,
+        positionId,
+        vol: volume,
+        lossTrend: 1,
+        stopLossPrice: trade.stopLossPrice,
+        stopLossType: 1,
+        stopLossOrderPrice: trade.stopLossPrice,
+      },
+      "Limit SL"
+    );
+    if (!slPlaced) {
+      await this.placeStopOrder(
+        {
+          symbol: trade.mexcSymbol,
+          positionId,
+          vol: volume,
+          lossTrend: 1,
+          stopLossPrice: trade.stopLossPrice,
+        },
+        "Market SL (fallback)"
+      );
+    }
+
+    // 2) Take-profit as a limit (maker) order.
+    const tpPlaced = await this.placeStopOrder(
+      {
+        symbol: trade.mexcSymbol,
+        positionId,
+        vol: volume,
+        profitTrend: 1,
+        takeProfitPrice,
+        takeProfitType: 1,
+        takeProfitOrderPrice: takeProfitPrice,
+      },
+      "Limit TP"
+    );
+    if (!tpPlaced) {
+      await this.placeStopOrder(
+        {
+          symbol: trade.mexcSymbol,
+          positionId,
+          vol: volume,
+          profitTrend: 1,
+          takeProfitPrice,
+        },
+        "Market TP (fallback)"
+      );
+    }
+  }
+
+  /**
+   * Resolve the MEXC positionId for a position just opened by a placed order.
+   * Tries getOrder(orderId) first (the fill order carries positionId directly),
+   * then falls back to matching the open-positions list by symbol + direction.
+   * Retries briefly since the position may take a moment to appear after the fill.
+   */
+  private async resolvePositionId(
+    symbol: string,
+    positionType: 1 | 2,
+    orderId: string
+  ): Promise<number | undefined> {
+    const attempts = 4;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      // 1. getOrder returns positionId on the fill order.
+      try {
+        const orderRes = (await this.client.getOrder(orderId)) as any;
+        const data = orderRes?.data ?? orderRes;
+        const pid = data?.positionId;
+        if (pid !== undefined && pid !== null && Number(pid) > 0) {
+          return Number(pid);
+        }
+      } catch {
+        // fall through to the open-positions lookup below
+      }
+
+      // 2. Match the open position by symbol + direction.
+      try {
+        const res = await this.client.getOpenPositions(symbol);
+        const positions: Position[] = Array.isArray(res.data) ? res.data : [];
+        const match = positions.find(
+          (p) =>
+            p.symbol === symbol &&
+            p.positionType === positionType &&
+            p.state !== 3 &&
+            p.holdVol > 0
+        );
+        if (match) return Number(match.positionId);
+      } catch {
+        // retry
+      }
+
+      if (attempt < attempts - 1) {
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Place a single TP/SL order via /stoporder/place and log the outcome.
+   * Returns true when MEXC accepted the order.
+   */
+  private async placeStopOrder(
+    params: SubmitStopOrderRequest,
+    label: string
+  ): Promise<boolean> {
+    try {
+      const response = await this.client.submitStopOrder(params);
+      if (response.success) {
+        this.logger.info(
+          `✅ ${label} placed for ${params.symbol}: ${String(response.data ?? "")}`
+        );
+        return true;
+      }
+      this.logger.error(
+        `❌ ${label} rejected for ${params.symbol}: ${response.message || `Code ${response.code}`}`
+      );
+      return false;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`❌ ${label} failed for ${params.symbol}: ${msg}`);
+      return false;
     }
   }
 

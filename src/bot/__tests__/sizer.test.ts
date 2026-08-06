@@ -19,6 +19,7 @@ const defaultConfig: BotConfig = {
   maxNotionalPerTrade: 100000,
   dryRun: false,
   tradingEnabled: true,
+  useLimitTpSl: false,
   logLevel: "SILENT",
   baseCurrency: "USDT",
   stateFilePath: "/tmp/test-state.json",

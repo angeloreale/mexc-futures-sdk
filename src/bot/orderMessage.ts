@@ -44,11 +44,13 @@ function estimateTpProfitPercent(
  *
  * @param record The trade record from a successful execution
  * @param currency Quote currency (e.g. "USDT")
+ * @param opts Optional display options (e.g. whether limit/maker TP/SL is active)
  * Rendered with HTML parse mode.
  */
 export function formatOrderPlacedMessage(
   record: TradeRecord,
-  currency: string
+  currency: string,
+  opts?: { useLimitTpSl?: boolean }
 ): string {
   const t = record.resolved;
   // A signal with multiple TPs is split into one order per TP, so each record
@@ -62,6 +64,7 @@ export function formatOrderPlacedMessage(
   const typeLabel = isTrigger
     ? `🔔 Pending trigger @ ${fmt(t.entry)}`
     : `💹 Market entry @ ${fmt(t.entry)}`;
+  const useLimitTpSl = opts?.useLimitTpSl === true && !isTrigger;
   const tpProfit = estimateTpProfit(t, orderVolume, orderTp);
   const tpProfitPct = estimateTpProfitPercent(t, orderVolume, orderTp);
   const orderRisk = t.volume > 0 ? t.riskAmount * (orderVolume / t.volume) : 0;
@@ -71,7 +74,7 @@ export function formatOrderPlacedMessage(
     ``,
     `🪙 <b>${t.mexcSymbol}</b> · ${dir} · ${t.leverage}x · ${marginMode}`,
     typeLabel,
-    `SL: ${fmt(t.stopLossPrice)} · TP: ${fmt(orderTp)}`,
+    `SL: ${fmt(t.stopLossPrice)} · TP: ${fmt(orderTp)}${useLimitTpSl ? ` 🛡️ Limit TP/SL` : ""}`,
     `Vol: ${fmt(orderVolume)} · Notional: ~${fmt(orderVolume * (t.contractSize || 1) * t.entry)} ${currency}`,
     `Risk: ${fmt(orderRisk)} ${currency} (${(t.riskPercent * 100).toFixed(1)}%)`,
     `Est. profit @ TP ${fmt(orderTp)}: ~${fmt(tpProfit)} ${currency} (${fmt(tpProfitPct, 1)}%)`,

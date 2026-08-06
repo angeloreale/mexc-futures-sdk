@@ -1301,7 +1301,9 @@ export class SignalBot {
    */
   private async sendOrderPlacedNotification(record: TradeRecord): Promise<void> {
     if (!this.config.summaryNotificationChannel) return;
-    const text = formatOrderPlacedMessage(record, this.config.baseCurrency);
+    const text = formatOrderPlacedMessage(record, this.config.baseCurrency, {
+      useLimitTpSl: this.config.useLimitTpSl,
+    });
     try {
       await this.telegram.telegram.sendMessage(
         this.config.summaryNotificationChannel,

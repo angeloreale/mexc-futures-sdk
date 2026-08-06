@@ -46,6 +46,12 @@ export function loadConfig(): BotConfig {
   const tradingEnabled =
     env.TRADING_ENABLED !== "false" && env.TRADING_ENABLED !== "0";
 
+  // Use Limit (Maker) orders for TP/SL exits (Stop-Limit) instead of market
+  // (taker) orders — can qualify for 0% maker fees on entry+exit TP/SL.
+  // Only applied to market entries; plan/stop entries keep market TP/SL.
+  const useLimitTpSl =
+    env.USE_LIMIT_TP_SL === "true" || env.USE_LIMIT_TP_SL === "1";
+
   const logLevel = (
     (env.LOG_LEVEL || "INFO").toUpperCase() as BotConfig["logLevel"]
   );
@@ -107,6 +113,7 @@ export function loadConfig(): BotConfig {
     maxNotionalPerTrade,
     dryRun,
     tradingEnabled,
+    useLimitTpSl,
     logLevel,
     baseCurrency,
     stateFilePath,

@@ -126,6 +126,15 @@ export interface BotConfig {
   /** Trading enabled switch */
   tradingEnabled: boolean;
 
+  /**
+   * Use Limit (Maker) orders for TP/SL instead of market (taker) orders.
+   * When enabled, TP/SL are placed as Stop-Limit orders via
+   * /private/stoporder/place so they can add liquidity and qualify for
+   * maker (often 0%) fees. Only applies to market entries; plan/stop entries
+   * still use market TP/SL (a warning is logged).
+   */
+  useLimitTpSl: boolean;
+
   /** Log level */
   logLevel: "SILENT" | "ERROR" | "WARN" | "INFO" | "DEBUG";
 

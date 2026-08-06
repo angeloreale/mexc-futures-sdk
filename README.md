@@ -141,6 +141,7 @@ All settings are environment variables. Copy `.env.example` and fill in:
 | `DEFAULT_TP_RATIO` | `1.5` | Default TP:SL ratio when no TP in signal |
 | `MAX_CONCURRENT_TRADES` | `5` | Max simultaneous open positions |
 | `MAX_NOTIONAL_PER_TRADE` | `10000` | Max USDT notional value per trade |
+| `USE_LIMIT_TP_SL` | `false` | Place TP/SL as **Limit (Maker)** Stop-Limit orders (0% maker fee) instead of market (taker) TP/SL. Applies to market entries; plan/stop entries keep market TP/SL (a warning is logged) |
 | **Safety** | | |
 | `DRY_RUN` | `true` | Parse & size, but don't submit orders |
 | `TRADING_ENABLED` | `true` | Master trading on/off switch |
@@ -177,6 +178,25 @@ places 3 orders immediately and the rest at ~200ms intervals — all done in und
 without exhausting the API. If you still see `513` errors, lower `ORDER_RATE_CAPACITY`
 to `1`–`2`; if you want more burst headroom, raise it. Throttling events are logged as
 `⏳ MEXC rate-limit: throttled ... (waited Xms)`.
+
+### 🛡️ Limit (Maker) TP/SL — `USE_LIMIT_TP_SL`
+
+By default the bot attaches **market** take-profit and stop-loss orders to every entry.
+Market (taker) exits incur the taker fee on both the TP and the SL. Setting
+`USE_LIMIT_TP_SL=true` switches TP/SL to **Stop-Limit orders** placed via
+`/private/stoporder/place`:
+
+- The market entry is submitted **without** attached TP/SL.
+- Once the position opens, a **limit** TP and a **limit** SL are attached to the
+  position at the signal's TP/SL prices (`takeProfitType=1` / `stopLossType=1`).
+- If the limit order rests in the book and adds liquidity when it fills, it's executed
+  as a **maker order** — potentially **0% fee** on the exit.
+- If placing a limit TP/SL fails, the bot automatically falls back to a **market**
+  TP/SL via the same endpoint so your position is never left unprotected.
+
+> ⚠️ **Stop-entry (plan/trigger) orders** can't attach limit TP/SL until the position
+> actually opens, so they keep market TP/SL (a warning is logged). Limit TP/SL applies
+> to market entries (`@`/`EP`-free signals), which is the default signal type.
 
 ### Running the Bot
 

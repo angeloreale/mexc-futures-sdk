@@ -25,6 +25,8 @@ import {
   SubmitTriggerOrderResponse,
   SubmitPlanOrderRequest,
   SubmitPlanOrderResponse,
+  SubmitStopOrderRequest,
+  SubmitStopOrderResponse,
   GetOrderResponse,
   PlanOrderListResponse,
   StopOrderListResponse,
@@ -488,6 +490,85 @@ export class MexcFuturesSDK {
       );
 
       this.logger.debug("🔍 Plan order response:", response.data);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  /**
+   * Place a Stop-Limit (TP/SL) order against an existing open position using
+   * /api/v1/private/stoporder/place.
+   *
+   * Used to attach LIMIT (maker) TP/SL orders: set takeProfitType=1 /
+   * stopLossType=1 and provide takeProfitOrderPrice / stopLossOrderPrice. When
+   * the *_type fields are omitted the TP/SL executes as a market (taker) order.
+   *
+   * @param params Stop-Limit order parameters (see SubmitStopOrderRequest)
+   */
+  async submitStopOrder(
+    params: SubmitStopOrderRequest
+  ): Promise<SubmitStopOrderResponse> {
+    try {
+      const p = params;
+      if (!p || typeof p.symbol !== "string" || p.symbol.length === 0) {
+        throw new MexcValidationError("symbol is required", "symbol");
+      }
+      if (p.positionId === undefined || p.positionId === null || p.positionId === "") {
+        throw new MexcValidationError("positionId is required", "positionId");
+      }
+      if (!Number.isFinite(p.vol) || p.vol <= 0) {
+        throw new MexcValidationError("vol must be a finite number > 0", "vol");
+      }
+      if (p.stopLossPrice !== undefined && (!Number.isFinite(p.stopLossPrice) || p.stopLossPrice < 0)) {
+        throw new MexcValidationError("stopLossPrice must be a finite number >= 0", "stopLossPrice");
+      }
+      if (p.stopLossType !== undefined && ![0, 1].includes(p.stopLossType)) {
+        throw new MexcValidationError("stopLossType must be 0 (market) or 1 (limit)", "stopLossType");
+      }
+      if (p.stopLossOrderPrice !== undefined && (!Number.isFinite(p.stopLossOrderPrice) || p.stopLossOrderPrice < 0)) {
+        throw new MexcValidationError("stopLossOrderPrice must be a finite number >= 0", "stopLossOrderPrice");
+      }
+      if (p.takeProfitPrice !== undefined && (!Number.isFinite(p.takeProfitPrice) || p.takeProfitPrice < 0)) {
+        throw new MexcValidationError("takeProfitPrice must be a finite number >= 0", "takeProfitPrice");
+      }
+      if (p.takeProfitType !== undefined && ![0, 1].includes(p.takeProfitType)) {
+        throw new MexcValidationError("takeProfitType must be 0 (market) or 1 (limit)", "takeProfitType");
+      }
+      if (p.takeProfitOrderPrice !== undefined && (!Number.isFinite(p.takeProfitOrderPrice) || p.takeProfitOrderPrice < 0)) {
+        throw new MexcValidationError("takeProfitOrderPrice must be a finite number >= 0", "takeProfitOrderPrice");
+      }
+      if (p.lossTrend !== undefined && ![1, 2, 3].includes(p.lossTrend)) {
+        throw new MexcValidationError("lossTrend must be 1 (latest), 2 (fair), or 3 (index)", "lossTrend");
+      }
+      if (p.profitTrend !== undefined && ![1, 2, 3].includes(p.profitTrend)) {
+        throw new MexcValidationError("profitTrend must be 1 (latest), 2 (fair), or 3 (index)", "profitTrend");
+      }
+      // At least one of TP/SL must be requested — this endpoint is meaningless otherwise.
+      if (p.stopLossPrice === undefined && p.takeProfitPrice === undefined) {
+        throw new MexcValidationError("at least one of stopLossPrice or takeProfitPrice is required", "stoporder");
+      }
+
+      this.logger.info("🎯 Placing stop-limit (TP/SL) order using /stoporder/place endpoint");
+
+      this.logger.debug(
+        "📦 Stop-order parameters:",
+        JSON.stringify(params, null, 2)
+      );
+
+      const headers = generateHeaders(
+        this.getAuthOptions(),
+        true,
+        params
+      );
+
+      const response = await this.httpClient.post(
+        ENDPOINTS.SUBMIT_STOP_ORDER,
+        params,
+        { headers }
+      );
+
+      this.logger.debug("🔍 Stop-order response:", response.data);
       return response.data;
     } catch (error) {
       throw error;

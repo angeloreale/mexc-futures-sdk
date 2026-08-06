@@ -5,6 +5,7 @@ export const ENDPOINTS = {
   SUBMIT_ORDER: "/private/order/submit",
   SUBMIT_TRIGGER_ORDER: "/private/order/trigger/submit",
   SUBMIT_PLAN_ORDER: "/private/planorder/place/v2",
+  SUBMIT_STOP_ORDER: "/private/stoporder/place", // POST Stop-Limit (TP/SL) placement on an open position
   CANCEL_ORDER: "/private/order/cancel",
   CANCEL_ORDER_BY_EXTERNAL_ID: "/private/order/cancel_with_external",
   CANCEL_ALL_ORDERS: "/private/order/cancel_all",
