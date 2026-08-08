@@ -1,26 +1,5 @@
 import type { ResolvedTrade } from "./types";
-import { fmtPrice } from "../utils/numbers";
-
-/**
- * Format a number for display (e.g. "1,234.56"). Non-finite → "—".
- */
-function fmt(n: number, digits = 2): string {
-  if (!Number.isFinite(n)) return "—";
-  return n.toLocaleString("en-US", {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
-}
-
-/**
- * Format a signed number with an explicit +/- prefix (e.g. "+176.70", "-3.20").
- * Non-finite → "—".
- */
-function fmtSigned(n: number, digits = 2): string {
-  if (!Number.isFinite(n)) return "—";
-  const sign = n > 0 ? "+" : n < 0 ? "-" : "";
-  return `${sign}${fmt(Math.abs(n), digits)}`;
-}
+import { fmtPrice, fmtAmount, fmtSigned } from "../utils/numbers";
 
 /**
  * Format a base-currency amount (volume × contractSize) for the hedge-net
@@ -197,8 +176,8 @@ export function formatTradeConfirmationMessage(
   const netSlPnl = slFees ? -grossSlLoss - slFees.total : null;
 
   const slPnlLine = netSlPnl !== null
-    ? `Est. net loss: <b>${fmtSigned(netSlPnl)}</b> ${currency} (${fmt(estimatePnlPercent(t, volume, netSlPnl, preciseEntry), 1)}%) · incl. fees`
-    : `Est. loss: ~${fmtSigned(-grossSlLoss)} ${currency} (${fmt(estimatePnlPercent(t, volume, -grossSlLoss, preciseEntry), 1)}%) · before fees`;
+    ? `Est. net loss: <b>${fmtSigned(netSlPnl)}</b> ${currency} (${fmtAmount(estimatePnlPercent(t, volume, netSlPnl, preciseEntry), 1)}%) · incl. fees`
+    : `Est. loss: ~${fmtSigned(-grossSlLoss)} ${currency} (${fmtAmount(estimatePnlPercent(t, volume, -grossSlLoss, preciseEntry), 1)}%) · before fees`;
 
   // One header + PNL line per TP target.
   const tpBlock: string[] = [];
@@ -209,8 +188,8 @@ export function formatTradeConfirmationMessage(
     const fees = estimateFees(t, volume, tp, opts, preciseEntry);
     if (i === 0) tpFees = fees;
     const pnlLine = fees
-      ? `   Est. net profit: <b>${fmtSigned(gross - fees.total)}</b> ${currency} (${fmt(estimatePnlPercent(t, volume, gross - fees.total, preciseEntry), 1)}%) · incl. fees`
-      : `   Est. profit: ~${fmt(gross)} ${currency} (${fmt(estimatePnlPercent(t, volume, gross, preciseEntry), 1)}%) · before fees`;
+      ? `   Est. net profit: <b>${fmtSigned(gross - fees.total)}</b> ${currency} (${fmtAmount(estimatePnlPercent(t, volume, gross - fees.total, preciseEntry), 1)}%) · incl. fees`
+      : `   Est. profit: ~${fmtAmount(gross)} ${currency} (${fmtAmount(estimatePnlPercent(t, volume, gross, preciseEntry), 1)}%) · before fees`;
     const header = tps.length > 1
       ? `📍 TP${i + 1}: <b>${fmtPrice(tp)}</b>`
       : `📍 Expected TP: <b>${fmtPrice(tp)}</b>`;
@@ -223,7 +202,7 @@ export function formatTradeConfirmationMessage(
   // Fee breakdown line (when known) — uses the first TP's exit leg.
   const feesLine =
     tpFees && slFees
-      ? `🧾 Est. fees: ${fmt(tpFees.total)} ${currency} (${fmt(tpFees.entryFee)} entry + ${fmt(tpFees.exitFee)} exit)`
+      ? `🧾 Est. fees: ${fmtAmount(tpFees.total)} ${currency} (${fmtAmount(tpFees.entryFee)} entry + ${fmtAmount(tpFees.exitFee)} exit)`
       : null;
 
   const dryRunTag = opts?.dryRun ? ` · 🧪 DRY RUN` : "";
@@ -298,7 +277,7 @@ export function formatTradeConfirmationMessage(
     `📉 Expected SL: <b>${fmtPrice(preciseSl)}</b>`,
     `   ${slPnlLine}`,
     ``,
-    `💵 Risk: ${fmt(risk)} ${currency} (${(t.riskPercent * 100).toFixed(1)}%) · Notional: ~${fmt(notional)} ${currency}`,
+    `💵 Risk: ${fmtAmount(risk)} ${currency} (${(t.riskPercent * 100).toFixed(1)}%) · Notional: ~${fmtAmount(notional)} ${currency}`,
     feesLine ? `${feesLine}` : null,
     queueLine ? `${queueLine}` : null,
     ``,

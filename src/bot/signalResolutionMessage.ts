@@ -1,16 +1,5 @@
 import type { SignalResolutionEvent } from "./types";
-import { fmtPrice } from "../utils/numbers";
-
-/**
- * Format a number for display. Non-finite → "—".
- */
-function fmt(n: number, digits = 2): string {
-  if (!Number.isFinite(n)) return "—";
-  return n.toLocaleString("en-US", {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
-}
+import { fmtPrice, fmtAmount } from "../utils/numbers";
 
 /**
  * Format a timestamp as a short date/time string.

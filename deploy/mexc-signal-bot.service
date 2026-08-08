@@ -8,6 +8,10 @@ Type=simple
 User=mexcbot
 Group=mexcbot
 WorkingDirectory=/opt/mexc-signal-bot
+
+# ── Auto-update: pull the latest dist.zip from main before every start ──
+# The script exits 0 when already up-to-date or after a successful update.
+ExecStartPre=/opt/mexc-signal-bot/update-dist.sh
 ExecStart=/usr/bin/node dist/bot/index.js
 Restart=always
 RestartSec=10

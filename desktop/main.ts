@@ -152,6 +152,15 @@ async function startBot(): Promise<void> {
     // when its code lives in the writable runtime folder instead of the asar.
     AppUpdater.ensureNodeModulesPath(path.join(__dirname, "..", "node_modules"));
 
+    // Clear the require cache for ALL bot modules so a code-refresh restart
+    // picks up the newly extracted dist/ instead of the stale cached copy.
+    const codeRoot = path.resolve(codeDir, "..");
+    for (const key of Object.keys(require.cache)) {
+      if (key.startsWith(codeRoot) || key.includes("dist/bot") || key.includes("dist-desktop")) {
+        delete require.cache[key];
+      }
+    }
+
     // Dynamically import the bot module (runs in-process)
     const { loadConfig } = require(path.join(codeDir, "bot", "config"));
     const { SignalBot } = require(path.join(codeDir, "bot", "bot"));

@@ -1,16 +1,5 @@
 import type { ResolvedTrade, TradeRecord } from "./types";
-import { fmtPrice } from "../utils/numbers";
-
-/**
- * Format a number for display (e.g. "1,234.56"). Non-finite → "—".
- */
-function fmt(n: number, digits = 2): string {
-  if (!Number.isFinite(n)) return "—";
-  return n.toLocaleString("en-US", {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
-}
+import { fmtPrice, fmtAmount } from "../utils/numbers";
 
 /**
  * Estimated gross profit (in quote currency) if price reaches the given
@@ -91,9 +80,9 @@ export function formatOrderPlacedMessage(
     `🪙 <b>${t.mexcSymbol}</b> · ${dir} · ${t.leverage}x · ${marginMode}`,
     typeLabel,
     `SL: ${fmtPrice(preciseSl)} · TP: ${fmtPrice(orderTp)}${useLimitTpSl ? ` 🛡️ Limit TP/SL` : ""}`,
-    `Vol: ${fmt(orderVolume)} · Notional: ~${fmt(orderVolume * (t.contractSize || 1) * preciseEntry)} ${currency}`,
-    `Risk: ${fmt(orderRisk)} ${currency} (${(t.riskPercent * 100).toFixed(1)}%)`,
-    `Est. profit @ TP ${fmtPrice(orderTp)}: ~${fmt(tpProfit)} ${currency} (${fmt(tpProfitPct, 1)}%)`,
+    `Vol: ${fmtAmount(orderVolume)} · Notional: ~${fmtAmount(orderVolume * (t.contractSize || 1) * preciseEntry)} ${currency}`,
+    `Risk: ${fmtAmount(orderRisk)} ${currency} (${(t.riskPercent * 100).toFixed(1)}%)`,
+    `Est. profit @ TP ${fmtPrice(orderTp)}: ~${fmtAmount(tpProfit)} ${currency} (${fmtAmount(tpProfitPct, 1)}%)`,
     ``,
     `Order ID: <code>${record.orderId}</code>`,
   ];

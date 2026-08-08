@@ -1,5 +1,7 @@
 import { Telegraf, Context } from "telegraf";
 import { message, channelPost } from "telegraf/filters";
+import * as fs from "fs";
+import * as path from "path";
 import { MexcFuturesSDK } from "../client";
 import { Logger } from "../utils/logger";
 import { BotConfig, TradeSignal, TradeRecord, SignalResolutionEvent, QueuedOrder } from "./types";
@@ -71,6 +73,8 @@ export class SignalBot {
   private orderQueue: QueuedOrder[] = [];
   /** Monotonic counter generating operator-facing queue IDs (Q1, Q2, ...). */
   private queueCounter = 0;
+  /** File path for persisting the queue between bot restarts. */
+  private readonly queueFilePath: string;
   /** Signal resolver: monitors resolver-channel signals for TP/SL hits (null when disabled). */
   private signalResolver: SignalResolver | null = null;
   /**
@@ -169,6 +173,12 @@ export class SignalBot {
 
     // Initialize Telegram bot
     this.telegram = new Telegraf(config.telegramBotToken);
+
+    // Queue persistence file lives alongside the state file.
+    this.queueFilePath = path.join(
+      path.dirname(path.resolve(config.stateFilePath)),
+      "queue.json"
+    );
   }
 
   /**
@@ -209,6 +219,10 @@ export class SignalBot {
     } catch (error) {
       this.logger.error("❌ Failed to load MEXC contracts — continuing anyway");
     }
+
+    // Restore any queued orders from a previous session so the operator
+    // doesn't lose them on restart.
+    await this.loadQueue();
 
     // Test MEXC connection
     try {
@@ -1424,6 +1438,7 @@ export class SignalBot {
 
     const pending = [...this.orderQueue];
     this.orderQueue = [];
+    this.persistQueue();
     this.logger.info(
       `🧾 CONFIRM ORDERS: placing ${pending.length} queued order(s)`
     );
@@ -1468,6 +1483,7 @@ export class SignalBot {
 
     const count = this.orderQueue.length;
     this.orderQueue = [];
+    this.persistQueue();
     this.logger.info(`🧾 CANCEL ORDERS: discarded ${count} queued order(s)`);
     await this.sendToChannel(
       chatId,
@@ -1511,6 +1527,7 @@ export class SignalBot {
     }
 
     const [removed] = this.orderQueue.splice(index, 1);
+    this.persistQueue();
     const sideLabel = removed.trade.side === 1 ? "LONG" : "SHORT";
     const remaining =
       this.orderQueue.length > 0
@@ -1526,6 +1543,187 @@ export class SignalBot {
       `🗑️ <b>CANCEL ${id}</b>\n\nRemoved ${removed.trade.mexcSymbol} ${sideLabel} from the queue. ${this.orderQueue.length} order(s) remaining.${remaining}`,
       "Queue-cancel notice"
     );
+  }
+
+  /**
+   * "LIST QUEUE" — displays all currently queued orders with their IDs,
+   * symbols, sides, entry/Tp/SL prices, and volume. Non-idempotent (always
+   * responds) so the operator can check the queue at any time.
+   */
+  private async handleListQueue(chatId: string): Promise<void> {
+    if (this.orderQueue.length === 0) {
+      await this.sendToChannel(
+        chatId,
+        `📋 <b>QUEUE</b>\n\nNo pending orders.`,
+        "List-queue notice"
+      );
+      return;
+    }
+
+    const rows = this.orderQueue.map((q) => {
+      const t = q.trade;
+      const dir = t.side === 1 ? "LONG" : "SHORT";
+      const entry = t.signal.entry;
+      const sl = t.signal.sl;
+      const tp =
+        t.signal.tp.length > 0
+          ? t.signal.tp.join(" / ")
+          : t.takeProfitPrice;
+      return (
+        `  <code>${q.id}</code> · ${t.mexcSymbol} ${dir} · ${t.leverage}x\n` +
+        `    Entry: ${entry} · SL: ${sl} · TP: ${tp} · Vol: ${t.volume}`
+      );
+    });
+
+    const text =
+      `📋 <b>QUEUE (${this.orderQueue.length})</b>\n\n${rows.join("\n")}\n\n` +
+      `Send <code>CONFIRM ORDERS</code> to place all · ` +
+      `<code>CANCEL ORDERS</code> to discard · ` +
+      `<code>CANCEL {ID}</code> to remove one`;
+
+    await this.sendToChannel(chatId, text, "List-queue notice");
+  }
+
+  // ── Queue persistence ───────────────────────────────────────────────
+
+  /**
+   * Persist the current queue to disk so it survives bot restarts.
+   * Serialises only the essential fields needed to reconstruct each
+   * QueuedOrder (the full ResolvedTrade is too large and contains
+   * non-serialisable references).
+   */
+  private saveQueue(): void {
+    try {
+      const dir = path.dirname(this.queueFilePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const data = this.orderQueue.map((q) => ({
+        id: q.id,
+        symbol: q.trade.mexcSymbol,
+        side: q.trade.side,
+        leverage: q.trade.leverage,
+        openType: q.trade.openType,
+        volume: q.trade.volume,
+        entry: q.trade.entry,
+        stopLossPrice: q.trade.stopLossPrice,
+        takeProfitPrice: q.trade.takeProfitPrice,
+        allTpTargets: q.trade.allTpTargets,
+        equity: q.trade.equity,
+        riskPercent: q.trade.riskPercent,
+        riskAmount: q.trade.riskAmount,
+        contractSize: q.trade.contractSize,
+        takerFeeRate: q.trade.takerFeeRate,
+        makerFeeRate: q.trade.makerFeeRate,
+        // Preserve the original signal so precision is not lost.
+        signalAction: q.trade.signal.action,
+        signalRawSymbol: q.trade.signal.rawSymbol,
+        signalEntry: q.trade.signal.entry,
+        signalSl: q.trade.signal.sl,
+        signalTp: q.trade.signal.tp,
+        signalOrderType: q.trade.signal.orderType,
+        signalRiskPercentOverride: q.trade.signal.riskPercentOverride,
+        signalLeverageOverride: q.trade.signal.leverageOverride,
+        signalExecuteCycle: q.trade.signal.executeCycle,
+      }));
+      fs.writeFileSync(this.queueFilePath, JSON.stringify(data, null, 2), "utf-8");
+    } catch (error) {
+      this.logger.error("❌ Failed to persist queue:", error);
+    }
+  }
+
+  /**
+   * Load a previously persisted queue from disk. Reconstructs QueuedOrder
+   * objects (without the full ResolvedTrade, since that requires the live
+   * contract cache). The reconstructed orders can be listed/cancelled but
+   * cannot be executed without a live contract cache.
+   */
+  private async loadQueue(): Promise<void> {
+    try {
+      if (!fs.existsSync(this.queueFilePath)) return;
+      const raw = fs.readFileSync(this.queueFilePath, "utf-8");
+      const data = JSON.parse(raw);
+      if (!Array.isArray(data) || data.length === 0) return;
+
+      // We need the contract cache to rebuild ResolvedTrade objects.
+      await this.resolver.refreshIfNeeded();
+
+      let restored = 0;
+      for (const item of data) {
+        if (!item.symbol || !item.signalAction) continue;
+        const contract = await this.resolver.resolve(item.symbol);
+        if (!contract) {
+          this.logger.warn(
+            `⚠️ Queue restore: contract ${item.symbol} not found — skipping queued order ${item.id}`
+          );
+          continue;
+        }
+
+        // Reconstruct a minimal TradeSignal from the persisted fields.
+        const signal: TradeSignal = {
+          raw: `[restored] ${item.signalAction} ${item.signalRawSymbol}`,
+          action: item.signalAction,
+          rawSymbol: item.signalRawSymbol,
+          entry: item.signalEntry ?? item.entry,
+          sl: item.signalSl ?? item.stopLossPrice,
+          tp: item.signalTp ?? (item.allTpTargets?.length ? item.allTpTargets : [item.takeProfitPrice]),
+          orderType: item.signalOrderType ?? "market",
+          riskPercentOverride: item.signalRiskPercentOverride,
+          leverageOverride: item.signalLeverageOverride,
+          executeCycle: item.signalExecuteCycle,
+        };
+
+        const trade: ResolvedTrade = {
+          signal,
+          mexcSymbol: item.symbol,
+          volume: item.volume,
+          side: item.side,
+          leverage: item.leverage,
+          openType: item.openType ?? 1,
+          entry: item.entry,
+          stopLossPrice: item.stopLossPrice,
+          takeProfitPrice: item.takeProfitPrice,
+          allTpTargets: item.allTpTargets ?? [item.takeProfitPrice],
+          equity: item.equity ?? 0,
+          riskPercent: item.riskPercent ?? 0.005,
+          riskAmount: item.riskAmount ?? 0,
+          minVol: contract.minVol,
+          volScale: contract.volScale ?? 0,
+          volUnit: contract.volUnit ?? 1,
+          currentPrice: item.entry,
+          contractSize: item.contractSize ?? contract.contractSize ?? 1,
+          takerFeeRate: item.takerFeeRate ?? contract.takerFeeRate,
+          makerFeeRate: item.makerFeeRate ?? contract.makerFeeRate,
+        };
+
+        this.orderQueue.push({ id: item.id, trade });
+        restored++;
+      }
+
+      // Restore the queue counter so new IDs don't collide.
+      for (const q of this.orderQueue) {
+        const num = parseInt(q.id.replace(/^Q/i, ""), 10);
+        if (!isNaN(num) && num > this.queueCounter) {
+          this.queueCounter = num;
+        }
+      }
+
+      if (restored > 0) {
+        this.logger.info(
+          `📋 Restored ${restored} queued order(s) from previous session`
+        );
+      }
+    } catch (error) {
+      this.logger.warn("⚠️ Could not load queue file — starting with empty queue");
+    }
+  }
+
+  /**
+   * Call after any mutation to the queue: persists to disk and updates the
+   * confirmation message if needed.
+   */
+  private persistQueue(): void {
+    this.saveQueue();
   }
 
   /**
@@ -1683,6 +1881,12 @@ export class SignalBot {
           chatId,
           messageId
         );
+        return;
+      }
+
+      // "LIST QUEUE" — displays all currently queued orders with their IDs.
+      if (/^list\s+queue\s*$/i.test(text.trim())) {
+        await this.handleListQueue(chatId);
         return;
       }
     }
@@ -1983,6 +2187,7 @@ export class SignalBot {
       trade: resolvedTrade,
     };
     this.orderQueue.push(queued);
+    this.persistQueue();
     this.logger.info(
       `🧾 Queued ${queued.id} ${resolvedTrade.mexcSymbol} ${resolvedTrade.side === 1 ? "LONG" : "SHORT"} — ${this.orderQueue.length} order(s) pending, awaiting CONFIRM ORDERS`
     );

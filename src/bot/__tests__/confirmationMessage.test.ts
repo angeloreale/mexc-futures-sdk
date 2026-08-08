@@ -100,7 +100,7 @@ describe("formatTradeConfirmationMessage", () => {
   it("formats a short position", () => {
     const text = formatTradeConfirmationMessage(
       makeTrade({
-        signal: makeSignal({ action: "SELL" }),
+        signal: makeSignal({ action: "SELL", sl: 124, tp: [122] }),
         side: 3,
         stopLossPrice: 124,
         takeProfitPrice: 122,

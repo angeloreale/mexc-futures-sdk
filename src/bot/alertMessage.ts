@@ -1,25 +1,5 @@
 import type { PositionAlert } from "./summaryMonitor";
-import { fmtPrice } from "../utils/numbers";
-
-/**
- * Format a number for display (e.g. "1,234.56"). Non-finite → "—".
- */
-function fmt(n: number, digits = 2): string {
-  if (!Number.isFinite(n)) return "—";
-  return n.toLocaleString("en-US", {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
-}
-
-/**
- * Format a signed number with an explicit +/- prefix. Non-finite → "—".
- */
-function fmtSigned(n: number, digits = 2): string {
-  if (!Number.isFinite(n)) return "—";
-  const sign = n > 0 ? "+" : n < 0 ? "-" : "";
-  return `${sign}${fmt(Math.abs(n), digits)}`;
-}
+import { fmtPrice, fmtAmount, fmtSigned } from "../utils/numbers";
 
 /**
  * Build the Telegram message for a >50%-toward-SL/TP alert.

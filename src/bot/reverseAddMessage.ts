@@ -1,4 +1,4 @@
-import { fmtPrice } from "../utils/numbers";
+import { fmtPrice, fmtAmount } from "../utils/numbers";
 
 /**
  * Result of a `REVERSE {orderId}` command.
@@ -65,17 +65,6 @@ export interface AddToResult {
 }
 
 /**
- * Format a number for display (e.g. "1,234.56"). Non-finite → "—".
- */
-function fmt(n: number, digits = 2): string {
-  if (!Number.isFinite(n)) return "—";
-  return n.toLocaleString("en-US", {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
-}
-
-/**
  * Build the Telegram message for a `REVERSE {orderId}` result.
  * Rendered with HTML parse mode.
  */
@@ -107,8 +96,8 @@ export function formatReverseMessage(res: ReverseResult): string {
         `🧪 <b>[DRY RUN] Would reverse</b>`,
         ``,
         `🪙 <b>${res.symbol ?? "?"}</b> · ${res.originalDirection ?? "?"} → ${res.newDirection ?? "?"} · ${res.leverage ?? "?"}x`,
-        `Close: ${fmt((res.closedVolume ?? 0) as number)} @ ${fmtPrice((res.price ?? 0) as number)}`,
-        `New: ${fmt((res.newVolume ?? 0) as number)} SL=${fmtPrice((res.stopLoss ?? 0) as number)} TP=${fmtPrice((res.takeProfit ?? 0) as number)}`,
+        `Close: ${fmtAmount((res.closedVolume ?? 0) as number)} @ ${fmtPrice((res.price ?? 0) as number)}`,
+        `New: ${fmtAmount((res.newVolume ?? 0) as number)} SL=${fmtPrice((res.stopLoss ?? 0) as number)} TP=${fmtPrice((res.takeProfit ?? 0) as number)}`,
         `Order: <code>${res.queriedId}</code>`,
       ].join("\n");
 
@@ -124,8 +113,8 @@ export function formatReverseMessage(res: ReverseResult): string {
         `🔄 <b>POSITION REVERSED</b>`,
         ``,
         `🪙 <b>${res.symbol ?? "?"}</b> · ${res.originalDirection ?? "?"} → ${res.newDirection ?? "?"} · ${res.leverage ?? "?"}x`,
-        `Closed: ${fmt((res.closedVolume ?? 0) as number)} @ ${fmtPrice((res.price ?? 0) as number)}`,
-        `Opened: ${fmt((res.newVolume ?? 0) as number)} @ ${fmtPrice((res.price ?? 0) as number)}`,
+        `Closed: ${fmtAmount((res.closedVolume ?? 0) as number)} @ ${fmtPrice((res.price ?? 0) as number)}`,
+        `Opened: ${fmtAmount((res.newVolume ?? 0) as number)} @ ${fmtPrice((res.price ?? 0) as number)}`,
         `SL: ${fmtPrice((res.stopLoss ?? 0) as number)} · TP: ${fmtPrice((res.takeProfit ?? 0) as number)}`,
         `Close Order: <code>${res.closeOrderId ?? "?"}</code>`,
         `New Order: <code>${res.newOrderId ?? "?"}</code>`,
@@ -165,8 +154,8 @@ export function formatAddToMessage(res: AddToResult): string {
         `🧪 <b>[DRY RUN] Would add to position</b>`,
         ``,
         `🪙 <b>${res.symbol ?? "?"}</b> · ${res.direction ?? "?"} · ${res.leverage ?? "?"}x`,
-        `Added: ${fmt((res.addedVolume ?? 0) as number)} @ ${fmtPrice((res.price ?? 0) as number)} (${fmt((res.riskPercent ?? 0) as number, 1)}% risk)`,
-        `Total: ${fmt((res.totalVolume ?? 0) as number)} · SL=${fmtPrice((res.stopLoss ?? 0) as number)} TP=${fmtPrice((res.takeProfit ?? 0) as number)}`,
+        `Added: ${fmtAmount((res.addedVolume ?? 0) as number)} @ ${fmtPrice((res.price ?? 0) as number)} (${fmtAmount((res.riskPercent ?? 0) as number, 1)}% risk)`,
+        `Total: ${fmtAmount((res.totalVolume ?? 0) as number)} · SL=${fmtPrice((res.stopLoss ?? 0) as number)} TP=${fmtPrice((res.takeProfit ?? 0) as number)}`,
         `Order: <code>${res.queriedId}</code>`,
       ].join("\n");
 
@@ -182,8 +171,8 @@ export function formatAddToMessage(res: AddToResult): string {
         `➕ <b>ADDED TO POSITION</b>`,
         ``,
         `🪙 <b>${res.symbol ?? "?"}</b> · ${res.direction ?? "?"} · ${res.leverage ?? "?"}x`,
-        `Added: ${fmt((res.addedVolume ?? 0) as number)} @ ${fmtPrice((res.price ?? 0) as number)} (${fmt((res.riskPercent ?? 0) as number, 1)}% risk)`,
-        `Total: ${fmt((res.totalVolume ?? 0) as number)} · SL=${fmtPrice((res.stopLoss ?? 0) as number)} TP=${fmtPrice((res.takeProfit ?? 0) as number)}`,
+        `Added: ${fmtAmount((res.addedVolume ?? 0) as number)} @ ${fmtPrice((res.price ?? 0) as number)} (${fmtAmount((res.riskPercent ?? 0) as number, 1)}% risk)`,
+        `Total: ${fmtAmount((res.totalVolume ?? 0) as number)} · SL=${fmtPrice((res.stopLoss ?? 0) as number)} TP=${fmtPrice((res.takeProfit ?? 0) as number)}`,
         `Order: <code>${res.orderId ?? "?"}</code>`,
       ].join("\n");
   }

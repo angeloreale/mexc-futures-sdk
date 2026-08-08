@@ -2,28 +2,7 @@ import type {
   AccountSnapshot,
   ClosedPositionInfo,
 } from "./pnlMonitor";
-import { fmtPrice } from "../utils/numbers";
-
-/**
- * Format a number for display (e.g. "1,234.56"). Non-finite → "—".
- */
-function fmt(n: number, digits = 2): string {
-  if (!Number.isFinite(n)) return "—";
-  return n.toLocaleString("en-US", {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
-}
-
-/**
- * Format a signed number with an explicit +/- prefix (e.g. "+176.70", "-3.20").
- * Non-finite → "—".
- */
-function fmtSigned(n: number, digits = 2): string {
-  if (!Number.isFinite(n)) return "—";
-  const sign = n > 0 ? "+" : n < 0 ? "-" : "";
-  return `${sign}${fmt(Math.abs(n), digits)}`;
-}
+import { fmtPrice, fmtAmount, fmtSigned } from "../utils/numbers";
 
 /**
  * Build the Telegram message sent when a position closes.
@@ -61,8 +40,8 @@ export function formatPositionClosedMessage(
     ``,
     `${icon} <b>Realized PNL: ${fmtSigned(info.realisedPnl)} ${account.currency} (${fmtSigned(info.pnlPercent)}%)</b>`,
     ``,
-    `💼 Available: ${fmt(account.availableBalance)} ${account.currency}`,
-    `📈 Equity: ${fmt(account.equity)} ${account.currency}`,
+    `💼 Available: ${fmtAmount(account.availableBalance)} ${account.currency}`,
+    `📈 Equity: ${fmtAmount(account.equity)} ${account.currency}`,
   ];
 
   return lines.join("\n");

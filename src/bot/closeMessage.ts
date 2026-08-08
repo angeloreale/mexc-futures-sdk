@@ -1,4 +1,4 @@
-import { fmtPrice } from "../utils/numbers";
+import { fmtPrice, fmtAmount, fmtSigned } from "../utils/numbers";
 
 /**
  * Result of a `Close {orderId}` command.
@@ -29,27 +29,6 @@ export interface PositionCloseResult {
   pnlPercent?: number;
   /** Quote currency (e.g. "USDT") used for the PNL display. */
   currency?: string;
-}
-
-/**
- * Format a number for display (e.g. "1,234.56"). Non-finite → "—".
- */
-function fmt(n: number, digits = 2): string {
-  if (!Number.isFinite(n)) return "—";
-  return n.toLocaleString("en-US", {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
-}
-
-/**
- * Format a signed number with an explicit +/- prefix (e.g. "+176.70", "-3.20").
- * Non-finite → "—".
- */
-function fmtSigned(n: number, digits = 2): string {
-  if (!Number.isFinite(n)) return "—";
-  const sign = n > 0 ? "+" : n < 0 ? "-" : "";
-  return `${sign}${fmt(Math.abs(n), digits)}`;
 }
 
 /**
@@ -86,7 +65,7 @@ export function formatPositionCloseMessage(
         `🧪 <b>[DRY RUN] Would close</b>`,
         ``,
         `🪙 <b>${res.symbol ?? "?"}</b> · ${res.positionType === 1 ? "LONG" : "SHORT"} · ${res.leverage ?? "?"}x`,
-        `Vol: ${fmt((res.volume ?? 0) as number)} @ ${fmtPrice((res.price ?? 0) as number)}${res.closePercent ? ` (${res.closePercent}% partial)` : ""}`,
+        `Vol: ${fmtAmount((res.volume ?? 0) as number)} @ ${fmtPrice((res.price ?? 0) as number)}${res.closePercent ? ` (${res.closePercent}% partial)` : ""}`,
         `Order: <code>${res.queriedId}</code>`,
       ].join("\n");
 
@@ -104,7 +83,7 @@ export function formatPositionCloseMessage(
         `✅ <b>POSITION CLOSED${partialLabel}</b>`,
         ``,
         `🪙 <b>${res.symbol ?? "?"}</b> · ${dir} · ${res.leverage ?? "?"}x`,
-        `Vol: ${fmt((res.volume ?? 0) as number)} @ ${fmtPrice((res.price ?? 0) as number)}`,
+        `Vol: ${fmtAmount((res.volume ?? 0) as number)} @ ${fmtPrice((res.price ?? 0) as number)}`,
       ];
       // Include realized PNL when it was resolved (full closes with a history
       // record available). Non-finite → omitted entirely.

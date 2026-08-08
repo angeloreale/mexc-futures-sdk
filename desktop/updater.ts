@@ -5,13 +5,28 @@ import extract from "extract-zip";
 
 // ── GitHub source of truth for code refreshes ──
 // The packaged app ships with the compiled bot code in `dist/`. "Refreshing
-// the code" pulls a newer compiled bundle (`dist.zip`) from a GitHub release
+// the code" pulls a newer compiled bundle (`dist.zip`) from the main branch
 // and swaps it into a writable runtime folder, so users get the latest bot
 // logic without reinstalling the whole app.
 export const GITHUB_OWNER = "dupipcom";
 export const GITHUB_REPO = "iris";
-/** Name of the release asset that holds the compiled bot code. */
+/** Name of the asset to pull from the main branch. */
 export const CODE_ASSET_NAME = "dist.zip";
+
+/**
+ * Direct URL to the dist.zip committed on the main branch.
+ * Using the raw main-branch file (instead of a GitHub Release asset) means
+ * updates are available as soon as the zip is pushed — no release needed.
+ */
+export const CODE_ASSET_URL =
+  `https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/main/dist.zip`;
+
+/**
+ * GitHub API URL to get the latest commit SHA on main — used as the version
+ * identifier so the updater knows whether the local copy is stale.
+ */
+export const CODE_VERSION_API_URL =
+  `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/commits/main`;
 
 /** Well-known states the update UI reacts to. */
 export type UpdateState =
@@ -192,39 +207,32 @@ export class AppUpdater {
 
   // ── Script code updates (GitHub dist.zip asset) ───
 
-  /** Query GitHub for the latest release and its dist.zip asset. */
+  /** Query GitHub for the latest main-branch commit SHA (used as version). */
   async checkCodeUpdate(): Promise<void> {
     this.setState("checking-code", "Checking for script code updates…");
     try {
-      const release = await this.fetchLatestRelease();
-      if (!release) {
+      const latestSha = await this.fetchLatestMainSha();
+      if (!latestSha) {
         this.setState(
           "error",
-          "No GitHub release found for this project — nothing to pull from."
+          "Could not determine latest main-branch commit — nothing to pull from."
         );
         return;
       }
-      const tag = release.tag_name ? String(release.tag_name) : "";
-      const asset = (release.assets || []).find(
-        (a: { name?: string }) => a && a.name === CODE_ASSET_NAME
-      );
-      this.snapshot.latestCodeVersion = tag || null;
-      this.snapshot.codeAssetUrl = asset?.browser_download_url || null;
+      // Use the short SHA as the version tag.
+      const tag = latestSha.slice(0, 7);
+      this.snapshot.latestCodeVersion = tag;
+      this.snapshot.codeAssetUrl = CODE_ASSET_URL;
 
       if (this.snapshot.codeVersion === tag) {
         this.setState(
           "code-current",
-          `Script code is up to date (${tag || "latest"}).`
-        );
-      } else if (!asset) {
-        this.setState(
-          "code-available",
-          `Newer script code found (${tag || "latest"}) but no ${CODE_ASSET_NAME} asset is attached to the release.`
+          `Script code is up to date (${tag}).`
         );
       } else {
         this.setState(
           "code-available",
-          `Script code update available: ${tag || "latest"}`
+          `Script code update available: ${tag}`
         );
       }
     } catch (err) {
@@ -234,23 +242,25 @@ export class AppUpdater {
   }
 
   /**
-   * Download the latest dist.zip bundle, atomically swap it into the runtime
-   * folder, and (if the bot was running) restart it on the new code.
+   * Download the latest dist.zip from the main branch, atomically swap it
+   * into the runtime folder, and (if the bot was running) restart it on the
+   * new code.
    */
   async refreshCode(deps: RefreshDeps): Promise<{ ok: boolean; message: string }> {
-    // Make sure we know the latest asset URL before downloading.
-    if (!this.snapshot.codeAssetUrl) {
+    // Always resolve the URL fresh — it's the main-branch raw URL.
+    const url = CODE_ASSET_URL;
+    let tag = this.snapshot.latestCodeVersion;
+
+    // If we haven't checked yet, fetch the latest SHA now.
+    if (!tag) {
       await this.checkCodeUpdate();
+      tag = this.snapshot.latestCodeVersion;
     }
-    const url = this.snapshot.codeAssetUrl;
-    const tag = this.snapshot.latestCodeVersion;
 
     if (!url) {
       return {
         ok: false,
-        message:
-          `No ${CODE_ASSET_NAME} bundle on the latest GitHub release — ` +
-          `publish one first (npm run dist:zip).`,
+        message: `No ${CODE_ASSET_NAME} on main branch — push one first.`,
       };
     }
 
@@ -385,23 +395,15 @@ export class AppUpdater {
     return null;
   }
 
-  private async fetchLatestRelease(): Promise<{
-    tag_name?: string;
-    assets?: Array<{ name?: string; browser_download_url?: string }>;
-  } | null> {
-    const res = await fetch(
-      `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`,
-      {
-        headers: {
-          "User-Agent": "Dupip-Invest-Connector",
-          Accept: "application/vnd.github+json",
-        },
-      }
-    );
+  private async fetchLatestMainSha(): Promise<string | null> {
+    const res = await fetch(CODE_VERSION_API_URL, {
+      headers: {
+        "User-Agent": "Dupip-Invest-Connector",
+        Accept: "application/vnd.github+json",
+      },
+    });
     if (!res.ok) return null;
-    return (await res.json()) as {
-      tag_name?: string;
-      assets?: Array<{ name?: string; browser_download_url?: string }>;
-    };
+    const data = (await res.json()) as { sha?: string };
+    return data?.sha || null;
   }
 }

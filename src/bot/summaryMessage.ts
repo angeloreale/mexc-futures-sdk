@@ -1,25 +1,5 @@
 import type { PositionSummary } from "./summaryMonitor";
-import { fmtPrice } from "../utils/numbers";
-
-/**
- * Format a number for display (e.g. "1,234.56"). Non-finite → "—".
- */
-function fmt(n: number, digits = 2): string {
-  if (!Number.isFinite(n)) return "—";
-  return n.toLocaleString("en-US", {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
-}
-
-/**
- * Format a signed number with an explicit +/- prefix. Non-finite → "—".
- */
-function fmtSigned(n: number, digits = 2): string {
-  if (!Number.isFinite(n)) return "—";
-  const sign = n > 0 ? "+" : n < 0 ? "-" : "";
-  return `${sign}${fmt(Math.abs(n), digits)}`;
-}
+import { fmtPrice, fmtAmount, fmtSigned } from "../utils/numbers";
 
 const DIVIDER = "──────────────";
 
@@ -75,7 +55,7 @@ export function formatPositionSummaryMessage(summary: PositionSummary): string {
           const pct = (prog as number) * 100;
           pctLine = isWinning
             ? ` · <b>${fmtSigned(pct, 0)}%</b> of TP`
-            : ` · <b>${fmt(Math.abs(pct), 0)}%</b> of SL`;
+            : ` · <b>${fmtAmount(Math.abs(pct), 0)}%</b> of SL`;
         }
         lines.push(
           `🎯 Est TP <b>${fmtSigned(p.estTpPnl)}</b> / SL <b>${fmtSigned(p.estSlPnl)}</b> ${cur}${pctLine}`
@@ -115,7 +95,7 @@ export function formatPositionSummaryMessage(summary: PositionSummary): string {
       if (o.kind === "STOP") {
         const arrow = o.triggerType === 1 ? "≥" : "≤";
         lines.push(
-          `🟡 ${o.symbol} ${dir} · STOP ${arrow}${fmtPrice(o.triggerPrice)} · ${fmt(o.vol)} · ${id}`
+          `🟡 ${o.symbol} ${dir} · STOP ${arrow}${fmtPrice(o.triggerPrice)} · ${fmtAmount(o.vol)} · ${id}`
         );
       } else {
         // TP/SL pair. For a long: TP fires on a rise (≥), SL on a fall (≤).
@@ -128,7 +108,7 @@ export function formatPositionSummaryMessage(summary: PositionSummary): string {
           ? `SL ${long ? "≤" : "≥"}${fmtPrice(o.stopLossPrice)}`
           : "";
         lines.push(
-          `🟡 ${o.symbol} ${dir} · ${[tp, sl].filter(Boolean).join(" / ")} · ${fmt(o.vol)} · ${id}`
+          `🟡 ${o.symbol} ${dir} · ${[tp, sl].filter(Boolean).join(" / ")} · ${fmtAmount(o.vol)} · ${id}`
         );
       }
     }
@@ -136,8 +116,8 @@ export function formatPositionSummaryMessage(summary: PositionSummary): string {
   lines.push(``);
 
   // ── Account ─────────────────────────────────────────────────────
-  lines.push(`💼 Available: ${fmt(summary.account.availableBalance)} ${cur}`);
-  lines.push(`📈 Equity: ${fmt(summary.account.equity)} ${cur}`);
+  lines.push(`💼 Available: ${fmtAmount(summary.account.availableBalance)} ${cur}`);
+  lines.push(`📈 Equity: ${fmtAmount(summary.account.equity)} ${cur}`);
 
   return lines.join("\n");
 }
