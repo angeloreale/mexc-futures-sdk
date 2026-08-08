@@ -118,6 +118,10 @@ export interface QueuedOrderLine {
   sideLabel: string;
   /** Entry price for the queued order */
   entry: number;
+  /** Take-profit price for the queued order */
+  tp: number;
+  /** Stop-loss price for the queued order */
+  sl: number;
   /** Order volume in contracts */
   volume: number;
   /** Contract size (base units per contract) */
@@ -218,6 +222,22 @@ export function formatTradeConfirmationMessage(
           : `<b>${net > 0 ? "LONG" : "SHORT"} ${fmtBase(Math.abs(net))}${unit}</b>`;
       hedgeLines.push(
         `🧮 <b>Hedge net:</b> ${symbol} · LONG ${fmtBase(longBase)}${unit} − SHORT ${fmtBase(shortBase)}${unit} → ${netLabel}`
+      );
+
+      // Hedge PNL: combined PNL if price moves to each side's TP, with both
+      // legs valued at the same reference price (gross, before fees).
+      //   ▲ price rises to the LONG leg's TP (longs profit, shorts lose)
+      //   ▼ price falls to the SHORT leg's TP (shorts profit, longs lose)
+      const longRef = longs[0].tp;
+      const shortRef = shorts[0].tp;
+      const upPnl =
+        longs.reduce((s, e) => s + (e.tp - e.entry) * e.volume * cs, 0) +
+        shorts.reduce((s, e) => s + (e.entry - longRef) * e.volume * cs, 0);
+      const downPnl =
+        shorts.reduce((s, e) => s + (e.entry - e.tp) * e.volume * cs, 0) +
+        longs.reduce((s, e) => s + (shortRef - e.entry) * e.volume * cs, 0);
+      hedgeLines.push(
+        `🧮 <b>Hedge PNL:</b> ▲ <b>${fmtSigned(upPnl)}</b> ${currency} (LONG TP) · ▼ <b>${fmtSigned(downPnl)}</b> ${currency} (SHORT TP) · before fees`
       );
     }
 

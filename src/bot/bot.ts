@@ -1569,6 +1569,8 @@ export class SignalBot {
         symbol: q.trade.mexcSymbol,
         sideLabel: q.trade.side === 1 ? "LONG" : "SHORT",
         entry: q.trade.entry,
+        tp: q.trade.takeProfitPrice,
+        sl: q.trade.stopLossPrice,
         volume: q.trade.volume,
         contractSize: q.trade.contractSize,
       })),

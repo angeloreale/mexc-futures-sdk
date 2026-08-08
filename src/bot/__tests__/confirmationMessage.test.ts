@@ -137,8 +137,8 @@ describe("formatTradeConfirmationMessage", () => {
   it("shows the pending queue with per-order IDs and awaiting-confirmation footer", () => {
     const text = formatTradeConfirmationMessage(makeTrade(), "USDT", {
       queue: [
-        { id: "Q1", symbol: "TAO_USDT", sideLabel: "LONG", entry: 123, volume: 41, contractSize: 1 },
-        { id: "Q2", symbol: "BTC_USDT", sideLabel: "SHORT", entry: 65000, volume: 0.5, contractSize: 1 },
+        { id: "Q1", symbol: "TAO_USDT", sideLabel: "LONG", entry: 123, tp: 124, sl: 122, volume: 41, contractSize: 1 },
+        { id: "Q2", symbol: "BTC_USDT", sideLabel: "SHORT", entry: 65000, tp: 64000, sl: 66000, volume: 0.5, contractSize: 1 },
       ],
     });
 
@@ -149,11 +149,11 @@ describe("formatTradeConfirmationMessage", () => {
     expect(text).toContain("⏳ Queued — awaiting <b>CONFIRM ORDERS</b>");
   });
 
-  it("shows a hedge net line when the same symbol is queued LONG and SHORT", () => {
+  it("shows hedge net and hedge PNL when the same symbol is queued LONG and SHORT", () => {
     const text = formatTradeConfirmationMessage(makeTrade(), "USDT", {
       queue: [
-        { id: "Q1", symbol: "ETH_USDT", sideLabel: "LONG", entry: 1920, volume: 100, contractSize: 0.01 },
-        { id: "Q2", symbol: "ETH_USDT", sideLabel: "SHORT", entry: 1921, volume: 60, contractSize: 0.01 },
+        { id: "Q1", symbol: "ETH_USDT", sideLabel: "LONG", entry: 1920, tp: 1930, sl: 1910, volume: 100, contractSize: 0.01 },
+        { id: "Q2", symbol: "ETH_USDT", sideLabel: "SHORT", entry: 1921, tp: 1910, sl: 1931, volume: 60, contractSize: 0.01 },
       ],
     });
 
@@ -161,30 +161,40 @@ describe("formatTradeConfirmationMessage", () => {
     expect(text).toContain(
       "🧮 <b>Hedge net:</b> ETH_USDT · LONG 1 ETH − SHORT 0.6 ETH → <b>LONG 0.4 ETH</b>"
     );
+    // Up (price → LONG TP 1930): LONG +10.00, SHORT (1921−1930)×0.6 = −5.40 → +4.60
+    // Down (price → SHORT TP 1910): SHORT +6.60, LONG (1910−1920)×1 = −10.00 → −3.40
+    expect(text).toContain(
+      "🧮 <b>Hedge PNL:</b> ▲ <b>+4.60</b> USDT (LONG TP) · ▼ <b>-3.40</b> USDT (SHORT TP) · before fees"
+    );
   });
 
   it("marks a same-symbol LONG+SHORT queue as fully hedged when volumes match", () => {
     const text = formatTradeConfirmationMessage(makeTrade(), "USDT", {
       queue: [
-        { id: "Q1", symbol: "ETH_USDT", sideLabel: "LONG", entry: 1920, volume: 100, contractSize: 0.01 },
-        { id: "Q2", symbol: "ETH_USDT", sideLabel: "SHORT", entry: 1921, volume: 100, contractSize: 0.01 },
+        { id: "Q1", symbol: "ETH_USDT", sideLabel: "LONG", entry: 1920, tp: 1930, sl: 1910, volume: 100, contractSize: 0.01 },
+        { id: "Q2", symbol: "ETH_USDT", sideLabel: "SHORT", entry: 1921, tp: 1910, sl: 1931, volume: 100, contractSize: 0.01 },
       ],
     });
 
     expect(text).toContain(
       "🧮 <b>Hedge net:</b> ETH_USDT · LONG 1 ETH − SHORT 1 ETH → <b>fully hedged</b>"
     );
+    // Equal size, long entry 1920 < short entry 1921 → profit locked on both sides
+    expect(text).toContain(
+      "🧮 <b>Hedge PNL:</b> ▲ <b>+1.00</b> USDT (LONG TP) · ▼ <b>+1.00</b> USDT (SHORT TP) · before fees"
+    );
   });
 
   it("does not show a hedge net line when symbols are not both directions", () => {
     const text = formatTradeConfirmationMessage(makeTrade(), "USDT", {
       queue: [
-        { id: "Q1", symbol: "ETH_USDT", sideLabel: "LONG", entry: 1920, volume: 100, contractSize: 0.01 },
-        { id: "Q2", symbol: "BTC_USDT", sideLabel: "SHORT", entry: 65000, volume: 1, contractSize: 0.001 },
+        { id: "Q1", symbol: "ETH_USDT", sideLabel: "LONG", entry: 1920, tp: 1930, sl: 1910, volume: 100, contractSize: 0.01 },
+        { id: "Q2", symbol: "BTC_USDT", sideLabel: "SHORT", entry: 65000, tp: 64000, sl: 66000, volume: 1, contractSize: 0.001 },
       ],
     });
 
     expect(text).not.toContain("Hedge net");
+    expect(text).not.toContain("Hedge PNL");
   });
 
   it("shows every TP target with its own PNL when the order has multiple TPs", () => {
