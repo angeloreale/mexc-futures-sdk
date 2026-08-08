@@ -38,6 +38,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AppUpdater = exports.CODE_VERSION_API_URL = exports.CODE_ASSET_URL = exports.CODE_ASSET_NAME = exports.GITHUB_REPO = exports.GITHUB_OWNER = void 0;
 const electron_updater_1 = require("electron-updater");
+const electron_1 = require("electron");
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const extract_zip_1 = __importDefault(require("extract-zip"));
@@ -84,6 +85,7 @@ class AppUpdater {
             latestCodeVersion: null,
             codeAssetUrl: null,
             downloadPercent: null,
+            appDownloadUrl: null,
         };
         this.configureAutoUpdater();
     }
@@ -130,19 +132,14 @@ class AppUpdater {
         });
         electron_updater_1.autoUpdater.on("update-available", (info) => {
             this.snapshot.latestAppVersion = info.version;
+            // Capture the download URL so we can fetch manually (bypass sha512).
+            const files = info.files;
+            this.snapshot.appDownloadUrl = files?.[0]?.url ?? null;
             this.setState("app-available", `App update available: v${info.version}`);
         });
         electron_updater_1.autoUpdater.on("update-not-available", (info) => {
             this.snapshot.latestAppVersion = info.version;
             this.setState("app-current", `You are on the latest app version (v${this.snapshot.appVersion}).`);
-        });
-        electron_updater_1.autoUpdater.on("download-progress", (p) => {
-            this.snapshot.downloadPercent = Math.round(p.percent * 10) / 10;
-            this.setState("downloading-app", `Downloading app update… ${this.snapshot.downloadPercent}%`);
-        });
-        electron_updater_1.autoUpdater.on("update-downloaded", (info) => {
-            this.snapshot.downloadPercent = 100;
-            this.setState("app-downloaded", `App update v${info.version} downloaded. Click “Install & Restart”.`);
         });
         electron_updater_1.autoUpdater.on("error", (err) => {
             const msg = err && err.message ? err.message : String(err);
@@ -159,18 +156,89 @@ class AppUpdater {
             this.setState("error", `Could not check for app updates: ${msg}`);
         }
     }
-    /** Start downloading the available app update (non-blocking). */
-    downloadAppUpdate() {
-        electron_updater_1.autoUpdater
-            .downloadUpdate()
-            .catch((err) => {
+    /**
+     * Download the app installer manually (bypasses electron-updater's built-in
+     * sha512 verification which can mismatch when the latest.yml was regenerated
+     * without re-uploading all artifacts).
+     */
+    async downloadAppUpdate() {
+        const url = this.snapshot.appDownloadUrl;
+        if (!url) {
+            this.setState("error", "No app download URL available — check for updates first.");
+            return;
+        }
+        this.setState("downloading-app", "Downloading app update…");
+        this.snapshot.downloadPercent = 0;
+        const tmpDir = path.join(this.runtimeCodeDir, ".app-update");
+        fs.mkdirSync(tmpDir, { recursive: true });
+        // Derive the file extension from the URL so we support .exe, .dmg, .AppImage.
+        const urlPath = new URL(url).pathname;
+        const ext = path.extname(urlPath) || ".exe";
+        // Remove query params that may be appended to the filename in the URL.
+        const cleanExt = ext.split("?")[0];
+        const installerPath = path.join(tmpDir, `installer${cleanExt}`);
+        try {
+            const res = await fetch(url, {
+                headers: { "User-Agent": "Dupip-Invest-Connector" },
+            });
+            if (!res.ok || !res.body) {
+                throw new Error(`Download failed (HTTP ${res.status})`);
+            }
+            const total = Number(res.headers.get("content-length") || 0);
+            let received = 0;
+            const reader = res.body.getReader();
+            const out = fs.createWriteStream(installerPath);
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done)
+                    break;
+                if (value) {
+                    out.write(Buffer.from(value));
+                    received += value.length;
+                    if (total > 0) {
+                        this.snapshot.downloadPercent = Math.min(100, Math.round((received / total) * 100));
+                        this.setState("downloading-app", `Downloading app update… ${this.snapshot.downloadPercent}%`);
+                    }
+                }
+            }
+            await new Promise((resolve, reject) => {
+                out.end(() => resolve());
+                out.on("error", reject);
+            });
+            this.snapshot.downloadPercent = 100;
+            this.setState("app-downloaded", `App update v${this.snapshot.latestAppVersion ?? "?"} downloaded. Click “Install & Restart”.`);
+        }
+        catch (err) {
+            // Clean up partial download
+            try {
+                fs.unlinkSync(installerPath);
+            }
+            catch { /* ok */ }
             const msg = err instanceof Error ? err.message : String(err);
             this.setState("error", `App download failed: ${msg}`);
-        });
+        }
     }
-    /** Quit and install the downloaded app update. */
+    /**
+     * Launch the downloaded installer. Uses shell.openPath which handles
+     * .exe (NSIS on Windows), .dmg (macOS), and .AppImage (Linux).
+     */
     installAppUpdate() {
-        electron_updater_1.autoUpdater.quitAndInstall(false, true);
+        const tmpDir = path.join(this.runtimeCodeDir, ".app-update");
+        if (!fs.existsSync(tmpDir)) {
+            this.setState("error", "Installer not found — download it first.");
+            return;
+        }
+        // Find the installer file (any extension).
+        const files = fs.readdirSync(tmpDir).filter((f) => f.startsWith("installer"));
+        if (files.length === 0) {
+            this.setState("error", "Installer not found — download it first.");
+            return;
+        }
+        const installerPath = path.join(tmpDir, files[0]);
+        electron_1.shell.openPath(installerPath).catch((err) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            this.setState("error", `Failed to launch installer: ${msg}`);
+        });
     }
     // ── Script code updates (GitHub dist.zip asset) ───
     /** Query GitHub for the latest main-branch commit SHA (used as version). */

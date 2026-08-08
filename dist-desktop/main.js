@@ -249,8 +249,8 @@ function setupIPC() {
         await updater?.checkAppUpdate();
         return updater?.getInfo() ?? null;
     });
-    electron_1.ipcMain.handle("download-app-update", () => {
-        updater?.downloadAppUpdate();
+    electron_1.ipcMain.handle("download-app-update", async () => {
+        await updater?.downloadAppUpdate();
         return updater?.getInfo() ?? null;
     });
     electron_1.ipcMain.handle("install-app-update", () => {
