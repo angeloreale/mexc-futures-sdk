@@ -66,6 +66,8 @@ export class SignalBot {
   /** Cache account equity for 10s to avoid rate limits on rapid signals. */
   private equityCache: { equity: number; ts: number } | null = null;
   private readonly EQUITY_CACHE_TTL_MS = 10_000;
+  /** Orders sized but NOT yet placed — submitted only on operator CONFIRM ORDERS. */
+  private orderQueue: ResolvedTrade[] = [];
   /** Signal resolver: monitors resolver-channel signals for TP/SL hits (null when disabled). */
   private signalResolver: SignalResolver | null = null;
 
@@ -1298,6 +1300,107 @@ export class SignalBot {
   }
 
   /**
+   * Place every order currently in the pending queue.
+   *
+   * "CONFIRM ORDERS" — drains the queue, submitting each queued trade via the
+   * executor. Sends an order-placed notification for each successful record
+   * (skipped in dry-run, mirroring the direct-execution path).
+   */
+  private async handleConfirmOrders(
+    chatId: string,
+    messageId: number
+  ): Promise<void> {
+    if (this.state.isProcessed(chatId, messageId)) {
+      this.logger.debug(`⏭️ CONFIRM ORDERS already processed`);
+      return;
+    }
+    this.state.markProcessed(chatId, messageId);
+
+    if (this.orderQueue.length === 0) {
+      this.logger.info("🧾 CONFIRM ORDERS: queue is empty — nothing to place");
+      await this.sendToChannel(
+        chatId,
+        `🧾 <b>CONFIRM ORDERS</b>\n\nNo pending orders in the queue.`,
+        "Empty-queue notice"
+      );
+      return;
+    }
+
+    const pending = [...this.orderQueue];
+    this.orderQueue = [];
+    this.logger.info(
+      `🧾 CONFIRM ORDERS: placing ${pending.length} queued order(s)`
+    );
+
+    for (const trade of pending) {
+      const records = await this.executor.execute(trade);
+      for (const record of records) {
+        if (record.success) {
+          this.logger.info(
+            `✅ Trade executed: ${record.orderId} for ${trade.mexcSymbol}`
+          );
+          // Notify the summary channel that an order was placed/executed
+          // (skip in dry-run — no real order was submitted).
+          if (!this.config.dryRun) {
+            await this.sendOrderPlacedNotification(record);
+            this.registerSlTp(record);
+          }
+        } else {
+          this.logger.error(
+            `❌ Trade failed: ${record.error} for ${trade.mexcSymbol}`
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Discard all orders currently in the pending queue.
+   *
+   * "CANCEL ORDERS" — removes every queued trade without placing anything.
+   */
+  private async handleCancelQueue(
+    chatId: string,
+    messageId: number
+  ): Promise<void> {
+    if (this.state.isProcessed(chatId, messageId)) {
+      this.logger.debug(`⏭️ CANCEL ORDERS already processed`);
+      return;
+    }
+    this.state.markProcessed(chatId, messageId);
+
+    const count = this.orderQueue.length;
+    this.orderQueue = [];
+    this.logger.info(`🧾 CANCEL ORDERS: discarded ${count} queued order(s)`);
+    await this.sendToChannel(
+      chatId,
+      `🗑️ <b>CANCEL ORDERS</b>\n\nDiscarded ${count} queued order(s).`,
+      "Queue-cancel notice"
+    );
+  }
+
+  /**
+   * Send a short text message to a specific Telegram channel (HTML parse mode).
+   */
+  private async sendToChannel(
+    channel: string,
+    text: string,
+    logTag: string
+  ): Promise<void> {
+    try {
+      await this.telegram.telegram.sendMessage(channel, text, {
+        parse_mode: "HTML",
+      });
+      this.logger.info(`${logTag} sent to ${channel}`);
+    } catch (error) {
+      this.logger.error(
+        `❌ Failed to send ${logTag}:`,
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+
+  /**
    * Send a pre-trade confirmation to the allowed channel the signal came from.
    * Shows the expected TP/SL and estimated realized PNL (including fees) before
    * any order is submitted to MEXC. Skips non-allowed channels.
@@ -1317,6 +1420,7 @@ export class SignalBot {
     const text = formatTradeConfirmationMessage(t, this.config.baseCurrency, {
       useLimitTpSl: this.config.useLimitTpSl,
       dryRun: this.config.dryRun,
+      pendingCount: this.orderQueue.length,
     });
     try {
       await this.telegram.telegram.sendMessage(channel, text, {
@@ -1391,6 +1495,18 @@ export class SignalBot {
         return;
       }
       return; // silently ignore
+    }
+
+    // Queue commands — signals are queued but NOT placed until the operator
+    // confirms: "CONFIRM ORDERS" places every queued order, "CANCEL ORDERS"
+    // discards the pending queue without placing anything.
+    if (/^confirm\s+orders?\s*$/i.test(text.trim())) {
+      await this.handleConfirmOrders(chatId, messageId);
+      return;
+    }
+    if (/^cancel\s+orders?\s*$/i.test(text.trim())) {
+      await this.handleCancelQueue(chatId, messageId);
+      return;
     }
 
     // Cancel command: "CANCEL {SYMBOL} {DIRECTION}" — finds pending plan
@@ -1654,30 +1770,15 @@ export class SignalBot {
       `📐 Sized: ${resolvedTrade.volume} contracts, ${resolvedTrade.side === 1 ? "LONG" : "SHORT"}, leverage ${resolvedTrade.leverage}x`
     );
 
-    // 5.5. Send a trade confirmation to the originating allowed channel BEFORE
-    // placing any order — shows the expected TP/SL and estimated realized PNL
-    // (including fees) so the channel can verify the plan before it executes.
+    // 6. Queue the order — nothing is submitted to MEXC until the operator
+    // confirms with "CONFIRM ORDERS". Sending the confirmation message here
+    // lets the channel verify expected TP/SL (including fees) before any
+    // order is actually placed.
+    this.orderQueue.push(resolvedTrade);
+    this.logger.info(
+      `🧾 Queued ${resolvedTrade.mexcSymbol} ${resolvedTrade.side === 1 ? "LONG" : "SHORT"} — ${this.orderQueue.length} order(s) pending, awaiting CONFIRM ORDERS`
+    );
     await this.sendTradeConfirmation(resolvedTrade, signal.chatId);
-
-    // 6. Execute
-    const records = await this.executor.execute(resolvedTrade);
-    for (const record of records) {
-      if (record.success) {
-        this.logger.info(
-          `✅ Trade executed: ${record.orderId} for ${resolvedTrade.mexcSymbol}`
-        );
-        // Notify the summary channel that an order was placed/executed
-        // (skip in dry-run — no real order was submitted).
-        if (!this.config.dryRun) {
-          await this.sendOrderPlacedNotification(record);
-          this.registerSlTp(record);
-        }
-      } else {
-        this.logger.error(
-          `❌ Trade failed: ${record.error} for ${resolvedTrade.mexcSymbol}`
-        );
-      }
-    }
   }
 
   /**

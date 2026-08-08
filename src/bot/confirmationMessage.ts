@@ -94,12 +94,12 @@ function estimatePnlPercent(
  *
  * @param t        The fully resolved trade (post-sizing, pre-execution)
  * @param currency Quote currency (e.g. "USDT")
- * @param opts     Display options (limit/maker TP/SL active, dry-run marker)
+ * @param opts     Display options (limit/maker TP/SL active, dry-run marker, pending queue size)
  */
 export function formatTradeConfirmationMessage(
   t: ResolvedTrade,
   currency: string,
-  opts?: { useLimitTpSl?: boolean; dryRun?: boolean }
+  opts?: { useLimitTpSl?: boolean; dryRun?: boolean; pendingCount?: number }
 ): string {
   const dir = t.side === 1 ? "LONG" : "SHORT";
   const marginMode = t.openType === 1 ? "Isolated" : "Cross";
@@ -141,6 +141,12 @@ export function formatTradeConfirmationMessage(
 
   const dryRunTag = opts?.dryRun ? ` · 🧪 DRY RUN` : "";
 
+  // Queue status (when the pending queue size is known).
+  const queueLine =
+    opts?.pendingCount !== undefined
+      ? `📋 Queue: ${opts.pendingCount} order(s) pending — send CONFIRM ORDERS to place`
+      : null;
+
   const lines = [
     `🧾 <b>TRADE CONFIRMATION</b>${dryRunTag}`,
     ``,
@@ -154,8 +160,9 @@ export function formatTradeConfirmationMessage(
     ``,
     `💵 Risk: ${fmt(risk)} ${currency} (${(t.riskPercent * 100).toFixed(1)}%) · Notional: ~${fmt(notional)} ${currency}`,
     feesLine ? `${feesLine}` : null,
+    queueLine ? `${queueLine}` : null,
     ``,
-    `⏳ Placing order...`,
+    `⏳ Queued — awaiting <b>CONFIRM ORDERS</b>`,
   ];
 
   return lines.filter((l): l is string => l !== null).join("\n");

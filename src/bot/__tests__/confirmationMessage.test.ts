@@ -131,6 +131,15 @@ describe("formatTradeConfirmationMessage", () => {
 
   it("adds a dry-run marker when configured", () => {
     const text = formatTradeConfirmationMessage(makeTrade(), "USDT", { dryRun: true });
-    expect(text).toContain("TRADE CONFIRMATION · 🧪 DRY RUN");
+    expect(text).toContain("TRADE CONFIRMATION</b> · 🧪 DRY RUN");
+  });
+
+  it("shows the pending queue size and awaiting-confirmation footer", () => {
+    const text = formatTradeConfirmationMessage(makeTrade(), "USDT", {
+      pendingCount: 3,
+    });
+
+    expect(text).toContain("📋 Queue: 3 order(s) pending — send CONFIRM ORDERS to place");
+    expect(text).toContain("⏳ Queued — awaiting <b>CONFIRM ORDERS</b>");
   });
 });
