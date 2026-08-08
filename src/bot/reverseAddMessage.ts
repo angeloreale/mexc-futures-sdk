@@ -1,3 +1,5 @@
+import { fmtPrice } from "../utils/numbers";
+
 /**
  * Result of a `REVERSE {orderId}` command.
  */
@@ -105,8 +107,8 @@ export function formatReverseMessage(res: ReverseResult): string {
         `🧪 <b>[DRY RUN] Would reverse</b>`,
         ``,
         `🪙 <b>${res.symbol ?? "?"}</b> · ${res.originalDirection ?? "?"} → ${res.newDirection ?? "?"} · ${res.leverage ?? "?"}x`,
-        `Close: ${fmt((res.closedVolume ?? 0) as number)} @ ${fmt((res.price ?? 0) as number)}`,
-        `New: ${fmt((res.newVolume ?? 0) as number)} SL=${fmt((res.stopLoss ?? 0) as number)} TP=${fmt((res.takeProfit ?? 0) as number)}`,
+        `Close: ${fmt((res.closedVolume ?? 0) as number)} @ ${fmtPrice((res.price ?? 0) as number)}`,
+        `New: ${fmt((res.newVolume ?? 0) as number)} SL=${fmtPrice((res.stopLoss ?? 0) as number)} TP=${fmtPrice((res.takeProfit ?? 0) as number)}`,
         `Order: <code>${res.queriedId}</code>`,
       ].join("\n");
 
@@ -122,9 +124,9 @@ export function formatReverseMessage(res: ReverseResult): string {
         `🔄 <b>POSITION REVERSED</b>`,
         ``,
         `🪙 <b>${res.symbol ?? "?"}</b> · ${res.originalDirection ?? "?"} → ${res.newDirection ?? "?"} · ${res.leverage ?? "?"}x`,
-        `Closed: ${fmt((res.closedVolume ?? 0) as number)} @ ${fmt((res.price ?? 0) as number)}`,
-        `Opened: ${fmt((res.newVolume ?? 0) as number)} @ ${fmt((res.price ?? 0) as number)}`,
-        `SL: ${fmt((res.stopLoss ?? 0) as number)} · TP: ${fmt((res.takeProfit ?? 0) as number)}`,
+        `Closed: ${fmt((res.closedVolume ?? 0) as number)} @ ${fmtPrice((res.price ?? 0) as number)}`,
+        `Opened: ${fmt((res.newVolume ?? 0) as number)} @ ${fmtPrice((res.price ?? 0) as number)}`,
+        `SL: ${fmtPrice((res.stopLoss ?? 0) as number)} · TP: ${fmtPrice((res.takeProfit ?? 0) as number)}`,
         `Close Order: <code>${res.closeOrderId ?? "?"}</code>`,
         `New Order: <code>${res.newOrderId ?? "?"}</code>`,
       ].join("\n");
@@ -163,8 +165,8 @@ export function formatAddToMessage(res: AddToResult): string {
         `🧪 <b>[DRY RUN] Would add to position</b>`,
         ``,
         `🪙 <b>${res.symbol ?? "?"}</b> · ${res.direction ?? "?"} · ${res.leverage ?? "?"}x`,
-        `Added: ${fmt((res.addedVolume ?? 0) as number)} @ ${fmt((res.price ?? 0) as number)} (${fmt((res.riskPercent ?? 0) as number, 1)}% risk)`,
-        `Total: ${fmt((res.totalVolume ?? 0) as number)} · SL=${fmt((res.stopLoss ?? 0) as number)} TP=${fmt((res.takeProfit ?? 0) as number)}`,
+        `Added: ${fmt((res.addedVolume ?? 0) as number)} @ ${fmtPrice((res.price ?? 0) as number)} (${fmt((res.riskPercent ?? 0) as number, 1)}% risk)`,
+        `Total: ${fmt((res.totalVolume ?? 0) as number)} · SL=${fmtPrice((res.stopLoss ?? 0) as number)} TP=${fmtPrice((res.takeProfit ?? 0) as number)}`,
         `Order: <code>${res.queriedId}</code>`,
       ].join("\n");
 
@@ -180,8 +182,8 @@ export function formatAddToMessage(res: AddToResult): string {
         `➕ <b>ADDED TO POSITION</b>`,
         ``,
         `🪙 <b>${res.symbol ?? "?"}</b> · ${res.direction ?? "?"} · ${res.leverage ?? "?"}x`,
-        `Added: ${fmt((res.addedVolume ?? 0) as number)} @ ${fmt((res.price ?? 0) as number)} (${fmt((res.riskPercent ?? 0) as number, 1)}% risk)`,
-        `Total: ${fmt((res.totalVolume ?? 0) as number)} · SL=${fmt((res.stopLoss ?? 0) as number)} TP=${fmt((res.takeProfit ?? 0) as number)}`,
+        `Added: ${fmt((res.addedVolume ?? 0) as number)} @ ${fmtPrice((res.price ?? 0) as number)} (${fmt((res.riskPercent ?? 0) as number, 1)}% risk)`,
+        `Total: ${fmt((res.totalVolume ?? 0) as number)} · SL=${fmtPrice((res.stopLoss ?? 0) as number)} TP=${fmtPrice((res.takeProfit ?? 0) as number)}`,
         `Order: <code>${res.orderId ?? "?"}</code>`,
       ].join("\n");
   }

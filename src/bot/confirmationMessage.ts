@@ -1,4 +1,5 @@
 import type { ResolvedTrade } from "./types";
+import { fmtPrice } from "../utils/numbers";
 
 /**
  * Format a number for display (e.g. "1,234.56"). Non-finite → "—".
@@ -105,8 +106,8 @@ export function formatTradeConfirmationMessage(
   const marginMode = t.openType === 1 ? "Isolated" : "Cross";
   const isTrigger = t.signal.orderType === "trigger";
   const typeLabel = isTrigger
-    ? `🔔 Trigger entry @ ${fmt(t.entry)}`
-    : `💹 Market entry @ ${fmt(t.entry)}`;
+    ? `🔔 Trigger entry @ ${fmtPrice(t.entry)}`
+    : `💹 Market entry @ ${fmtPrice(t.entry)}`;
   const cs = t.contractSize || 1;
   const volume = t.volume;
 
@@ -153,9 +154,9 @@ export function formatTradeConfirmationMessage(
     `🪙 <b>${t.mexcSymbol}</b> · ${dir} · ${t.leverage}x · ${marginMode}`,
     typeLabel,
     ``,
-    `📍 Expected TP: <b>${fmt(tp)}</b>`,
+    `📍 Expected TP: <b>${fmtPrice(tp)}</b>`,
     `   ${tpPnlLine}`,
-    `📉 Expected SL: <b>${fmt(sl)}</b>`,
+    `📉 Expected SL: <b>${fmtPrice(sl)}</b>`,
     `   ${slPnlLine}`,
     ``,
     `💵 Risk: ${fmt(risk)} ${currency} (${(t.riskPercent * 100).toFixed(1)}%) · Notional: ~${fmt(notional)} ${currency}`,

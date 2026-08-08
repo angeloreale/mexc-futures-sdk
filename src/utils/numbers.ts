@@ -10,29 +10,28 @@ export function toFiniteNumber(value: unknown): number {
 }
 
 /**
- * Format a price for display with adaptive decimal precision.
- * Small prices (altcoins like 0.59) get up to 10 decimals;
- * larger prices (BTC ~60k) get fewer.
+ * Format a price for display with high precision.
+ *
+ * Preserves the asset's actual precision up to 10 decimal places (most MEXC
+ * contracts support several decimals, e.g. 0.00001234) instead of truncating
+ * to 2 decimals for larger prices, adds thousands separators, and keeps at
+ * least 2 decimal places for readability.
  *
  * Non-finite numbers return "—".
  */
 export function fmtPrice(n: number): string {
   if (!Number.isFinite(n)) return "—";
-  const abs = Math.abs(n);
-  let digits: number;
-  if (abs < 0.001) {
-    digits = 10;
-  } else if (abs < 1) {
-    digits = 6;
-  } else if (abs < 100) {
-    digits = 4;
-  } else {
-    digits = 2;
+  // Up to 10 decimals so high-precision prices are not truncated.
+  let s = n.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 10,
+  });
+  // Trim trailing zeros beyond the 2nd decimal, but keep at least 2 decimals.
+  const dot = s.indexOf(".");
+  if (dot !== -1) {
+    let frac = s.slice(dot + 1).replace(/0+$/, "");
+    if (frac.length < 2) frac = frac.padEnd(2, "0");
+    s = s.slice(0, dot) + "." + frac;
   }
-  // Strip trailing zeros after decimal, but keep at least 2 decimal places
-  // for prices >= 1.
-  const formatted = n.toFixed(digits);
-  if (abs >= 1) return formatted;
-  // For sub-1 prices, strip trailing zeros but keep at least 2 decimals
-  return formatted.replace(/0+$/, "").replace(/\.$/, ".00");
+  return s;
 }

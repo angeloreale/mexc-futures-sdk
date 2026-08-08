@@ -1,4 +1,5 @@
 import type { SignalResolutionEvent } from "./types";
+import { fmtPrice } from "../utils/numbers";
 
 /**
  * Format a number for display. Non-finite → "—".
@@ -39,7 +40,7 @@ export function formatSignalResolutionMessage(event: SignalResolutionEvent): str
       `🎯 <b>${tpNum} HIT</b>`,
       ``,
       `🪙 <b>${s.mexcSymbol}</b> · ${dir}`,
-      `Entry: ${fmt(s.entry)} → TP: ${fmt(event.hitPrice)}`,
+      `Entry: ${fmtPrice(s.entry)} → TP: ${fmtPrice(event.hitPrice)}`,
       ``,
       `──`,
       `📅 Signal: ${fmtTime(s.createdAt)}`,
@@ -52,7 +53,7 @@ export function formatSignalResolutionMessage(event: SignalResolutionEvent): str
     `🛑 <b>SL HIT</b>`,
     ``,
     `🪙 <b>${s.mexcSymbol}</b> · ${dir}`,
-    `Entry: ${fmt(s.entry)} → SL: ${fmt(event.hitPrice)}`,
+    `Entry: ${fmtPrice(s.entry)} → SL: ${fmtPrice(event.hitPrice)}`,
     ``,
     `──`,
     `📅 Signal: ${fmtTime(s.createdAt)}`,

@@ -1,3 +1,5 @@
+import { fmtPrice } from "../utils/numbers";
+
 /**
  * Result of a `Close {orderId}` command.
  */
@@ -84,7 +86,7 @@ export function formatPositionCloseMessage(
         `🧪 <b>[DRY RUN] Would close</b>`,
         ``,
         `🪙 <b>${res.symbol ?? "?"}</b> · ${res.positionType === 1 ? "LONG" : "SHORT"} · ${res.leverage ?? "?"}x`,
-        `Vol: ${fmt((res.volume ?? 0) as number)} @ ${fmt((res.price ?? 0) as number)}${res.closePercent ? ` (${res.closePercent}% partial)` : ""}`,
+        `Vol: ${fmt((res.volume ?? 0) as number)} @ ${fmtPrice((res.price ?? 0) as number)}${res.closePercent ? ` (${res.closePercent}% partial)` : ""}`,
         `Order: <code>${res.queriedId}</code>`,
       ].join("\n");
 
@@ -102,7 +104,7 @@ export function formatPositionCloseMessage(
         `✅ <b>POSITION CLOSED${partialLabel}</b>`,
         ``,
         `🪙 <b>${res.symbol ?? "?"}</b> · ${dir} · ${res.leverage ?? "?"}x`,
-        `Vol: ${fmt((res.volume ?? 0) as number)} @ ${fmt((res.price ?? 0) as number)}`,
+        `Vol: ${fmt((res.volume ?? 0) as number)} @ ${fmtPrice((res.price ?? 0) as number)}`,
       ];
       // Include realized PNL when it was resolved (full closes with a history
       // record available). Non-finite → omitted entirely.

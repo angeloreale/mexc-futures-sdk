@@ -162,7 +162,7 @@ describe("formatPositionSummaryMessage", () => {
 
     expect(text).toContain("Pending Orders (3)");
     expect(text).toContain("🟡 TAO_USDT LONG · STOP ≥187.54 · 0.50 · <code>…397504</code>");
-    expect(text).toContain("🟡 XLM_USDT LONG · TP ≥0.18 / SL ≤0.17 · 110.00 · <code>88</code>");
+    expect(text).toContain("🟡 XLM_USDT LONG · TP ≥0.1788 / SL ≤0.1677 · 110.00 · <code>88</code>");
     expect(text).toContain("🟡 ETH_USDT SHORT · TP ≤1,856.00 / SL ≥1,884.95 · 0.17 · <code>99</code>");
   });
 

@@ -1,4 +1,5 @@
 import type { PositionSummary } from "./summaryMonitor";
+import { fmtPrice } from "../utils/numbers";
 
 /**
  * Format a number for display (e.g. "1,234.56"). Non-finite → "—".
@@ -56,7 +57,7 @@ export function formatPositionSummaryMessage(summary: PositionSummary): string {
       const icon = p.currentPnl >= 0 ? "🟢" : "🔴";
       lines.push(DIVIDER);
       lines.push(`${icon} <b>${p.symbol}</b> ${dir} · ${p.leverage}x`);
-      lines.push(`Entry: ${fmt(p.openAvgPrice)}`);
+      lines.push(`Entry: ${fmtPrice(p.openAvgPrice)}`);
       lines.push(`PNL: <b>${fmtSigned(p.currentPnl)} ${cur}</b>`);
       lines.push(`   max ${fmtSigned(p.maxPnl)} / min ${fmtSigned(p.minPnl)} ${cur}`);
       lines.push(
@@ -114,17 +115,17 @@ export function formatPositionSummaryMessage(summary: PositionSummary): string {
       if (o.kind === "STOP") {
         const arrow = o.triggerType === 1 ? "≥" : "≤";
         lines.push(
-          `🟡 ${o.symbol} ${dir} · STOP ${arrow}${fmt(o.triggerPrice)} · ${fmt(o.vol)} · ${id}`
+          `🟡 ${o.symbol} ${dir} · STOP ${arrow}${fmtPrice(o.triggerPrice)} · ${fmt(o.vol)} · ${id}`
         );
       } else {
         // TP/SL pair. For a long: TP fires on a rise (≥), SL on a fall (≤).
         // For a short: TP fires on a fall (≤), SL on a rise (≥).
         const long = o.positionType === 1;
         const tp = Number.isFinite(o.takeProfitPrice)
-          ? `TP ${long ? "≥" : "≤"}${fmt(o.takeProfitPrice)}`
+          ? `TP ${long ? "≥" : "≤"}${fmtPrice(o.takeProfitPrice)}`
           : "";
         const sl = Number.isFinite(o.stopLossPrice)
-          ? `SL ${long ? "≤" : "≥"}${fmt(o.stopLossPrice)}`
+          ? `SL ${long ? "≤" : "≥"}${fmtPrice(o.stopLossPrice)}`
           : "";
         lines.push(
           `🟡 ${o.symbol} ${dir} · ${[tp, sl].filter(Boolean).join(" / ")} · ${fmt(o.vol)} · ${id}`

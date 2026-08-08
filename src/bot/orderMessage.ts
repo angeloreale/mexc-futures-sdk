@@ -1,4 +1,5 @@
 import type { ResolvedTrade, TradeRecord } from "./types";
+import { fmtPrice } from "../utils/numbers";
 
 /**
  * Format a number for display (e.g. "1,234.56"). Non-finite → "—".
@@ -62,8 +63,8 @@ export function formatOrderPlacedMessage(
   const marginMode = t.openType === 1 ? "Isolated" : "Cross";
   const isTrigger = t.signal.orderType === "trigger";
   const typeLabel = isTrigger
-    ? `🔔 Pending trigger @ ${fmt(t.entry)}`
-    : `💹 Market entry @ ${fmt(t.entry)}`;
+    ? `🔔 Pending trigger @ ${fmtPrice(t.entry)}`
+    : `💹 Market entry @ ${fmtPrice(t.entry)}`;
   const useLimitTpSl = opts?.useLimitTpSl === true && !isTrigger;
   const tpProfit = estimateTpProfit(t, orderVolume, orderTp);
   const tpProfitPct = estimateTpProfitPercent(t, orderVolume, orderTp);
@@ -74,10 +75,10 @@ export function formatOrderPlacedMessage(
     ``,
     `🪙 <b>${t.mexcSymbol}</b> · ${dir} · ${t.leverage}x · ${marginMode}`,
     typeLabel,
-    `SL: ${fmt(t.stopLossPrice)} · TP: ${fmt(orderTp)}${useLimitTpSl ? ` 🛡️ Limit TP/SL` : ""}`,
+    `SL: ${fmtPrice(t.stopLossPrice)} · TP: ${fmtPrice(orderTp)}${useLimitTpSl ? ` 🛡️ Limit TP/SL` : ""}`,
     `Vol: ${fmt(orderVolume)} · Notional: ~${fmt(orderVolume * (t.contractSize || 1) * t.entry)} ${currency}`,
     `Risk: ${fmt(orderRisk)} ${currency} (${(t.riskPercent * 100).toFixed(1)}%)`,
-    `Est. profit @ TP ${fmt(orderTp)}: ~${fmt(tpProfit)} ${currency} (${fmt(tpProfitPct, 1)}%)`,
+    `Est. profit @ TP ${fmtPrice(orderTp)}: ~${fmt(tpProfit)} ${currency} (${fmt(tpProfitPct, 1)}%)`,
     ``,
     `Order ID: <code>${record.orderId}</code>`,
   ];
