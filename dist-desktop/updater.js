@@ -212,7 +212,7 @@ class AppUpdater {
         this.setState("refreshing-code", `Downloading script code${tag ? ` ${tag}` : ""}…`);
         // Stop the bot before swapping the code it is executing from.
         if (wasRunning) {
-            deps.stopBot();
+            await deps.stopBot();
         }
         const tmpRoot = path.join(this.runtimeCodeDir, `.staging-${Date.now()}`);
         const zipTmp = path.join(tmpRoot, "bundle.zip");

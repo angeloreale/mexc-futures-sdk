@@ -182,19 +182,28 @@ async function startBot() {
         unhookConsole();
     }
 }
-function stopBot() {
+async function stopBot() {
     if (!botRunning) {
         sendToRenderer("log", "⚠️  Not running.");
         return;
     }
     sendToRenderer("log", "🛑 Stopping...");
     sendToRenderer("status", "stopping");
-    if (botInstance && typeof botInstance.stop === "function") {
-        botInstance.stop();
-    }
+    // Clear state immediately so a rapid re-start/refresh can't double-stop,
+    // then actually shut the bot down (stops Telegram polling + monitors).
+    const bot = botInstance;
     botInstance = null;
     botRunning = false;
     unhookConsole();
+    if (bot && typeof bot.stop === "function") {
+        try {
+            await bot.stop();
+        }
+        catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            sendToRenderer("log", `⚠️ Error while stopping: ${msg}`);
+        }
+    }
     sendToRenderer("status", "stopped");
 }
 function sendToRenderer(channel, data) {
@@ -213,8 +222,8 @@ function setupIPC() {
         await startBot();
         return { ok: true };
     });
-    electron_1.ipcMain.handle("stop-bot", () => {
-        stopBot();
+    electron_1.ipcMain.handle("stop-bot", async () => {
+        await stopBot();
         return { ok: true };
     });
     electron_1.ipcMain.handle("get-bot-status", () => {
@@ -280,6 +289,6 @@ electron_1.app.on("window-all-closed", () => {
     }
 });
 electron_1.app.on("before-quit", () => {
-    stopBot();
+    void stopBot();
 });
 //# sourceMappingURL=main.js.map

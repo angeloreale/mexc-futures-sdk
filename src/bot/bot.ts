@@ -251,6 +251,28 @@ export class SignalBot {
   }
 
   /**
+   * Gracefully stop the bot without exiting the process.
+   *
+   * Stops the monitors and the Telegram long-polling loop so `start()`'s
+   * `await this.telegram.launch()` resolves and the bot can be started again
+   * (used by the desktop app on Stop / script-code refresh). Mirrors the
+   * SIGINT/SIGTERM shutdown, minus `process.exit()`.
+   */
+  async stop(): Promise<void> {
+    this.logger.info("🛑 Stopping bot...");
+    this.pnlMonitor?.stop();
+    this.signalResolver?.stop();
+    await this.summaryMonitor.stop();
+    try {
+      this.telegram.stop();
+    } catch {
+      /* ignore */
+    }
+    this.logger.info("🛑 Bot stopped");
+    await this.logger.close();
+  }
+
+  /**
    * Send the position-closed PNL notification to the configured channel.
    */
   private async sendPositionClosedNotification(

@@ -48,7 +48,7 @@ export interface UpdateSnapshot {
 
 export interface RefreshDeps {
   isBotRunning: () => boolean;
-  stopBot: () => void;
+  stopBot: () => Promise<void>;
   startBot: () => Promise<void>;
 }
 
@@ -259,7 +259,7 @@ export class AppUpdater {
 
     // Stop the bot before swapping the code it is executing from.
     if (wasRunning) {
-      deps.stopBot();
+      await deps.stopBot();
     }
 
     const tmpRoot = path.join(this.runtimeCodeDir, `.staging-${Date.now()}`);

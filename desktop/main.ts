@@ -171,7 +171,7 @@ async function startBot(): Promise<void> {
   }
 }
 
-function stopBot(): void {
+async function stopBot(): Promise<void> {
   if (!botRunning) {
     sendToRenderer("log", "⚠️  Not running.");
     return;
@@ -180,13 +180,22 @@ function stopBot(): void {
   sendToRenderer("log", "🛑 Stopping...");
   sendToRenderer("status", "stopping");
 
-  if (botInstance && typeof (botInstance as any).stop === "function") {
-    (botInstance as any).stop();
-  }
-
+  // Clear state immediately so a rapid re-start/refresh can't double-stop,
+  // then actually shut the bot down (stops Telegram polling + monitors).
+  const bot = botInstance;
   botInstance = null;
   botRunning = false;
   unhookConsole();
+
+  if (bot && typeof (bot as any).stop === "function") {
+    try {
+      await (bot as any).stop();
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      sendToRenderer("log", `⚠️ Error while stopping: ${msg}`);
+    }
+  }
+
   sendToRenderer("status", "stopped");
 }
 
@@ -210,8 +219,8 @@ function setupIPC(): void {
     return { ok: true };
   });
 
-  ipcMain.handle("stop-bot", () => {
-    stopBot();
+  ipcMain.handle("stop-bot", async () => {
+    await stopBot();
     return { ok: true };
   });
 
@@ -290,5 +299,5 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
-  stopBot();
+  void stopBot();
 });

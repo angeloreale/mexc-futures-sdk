@@ -356,9 +356,35 @@ Close 1462152523 30%
 
 The position ID is preferred because it always exists on the open-positions API and carries the authoritative position direction, so closing by it never hits MEXC's "wrong direction" error (important in hedge mode, where a symbol can hold both a LONG and a SHORT simultaneously). For backward compatibility the command still accepts a MEXC fill order ID or plan/trigger order ID, which are resolved via the API. The command is idempotent and requires the channel to be in `ALLOWED_CHANNELS`.
 
+### 🧾 Trade Confirmations & Order Queue
+
+Signals are **not** placed immediately. When a valid signal is parsed and sized, the bot **queues** the order and sends a **trade confirmation** to the allowed channel the signal came from — showing the expected TP and expected SL, plus the estimated realized PNL **net of fees** when the contract fee rates are known:
+
+```
+🧾 TRADE CONFIRMATION
+
+🪙 TAO_USDT · LONG · 50x · Isolated
+💹 Market entry @ 123.00
+📍 Expected TP: 124.00
+   Est. net profit: +34.92 USDT (34.6%) · incl. fees
+📉 Expected SL: 122.00
+   Est. net loss: -47.03 USDT (-46.6%) · incl. fees
+💵 Risk: 100.00 USDT (1.0%) · Notional: ~5,043.00 USDT
+🧾 Est. fees: 6.08 USDT (3.03 entry + 3.05 exit)
+📋 Queue: 1 order(s) pending — send CONFIRM ORDERS to place
+⏳ Queued — awaiting CONFIRM ORDERS
+```
+
+The operator then decides what happens to the pending queue:
+
+- `CONFIRM ORDERS` — places **every** queued order (market orders fill immediately, trigger entries are submitted as pending plan orders). Confirmation is idempotent per message.
+- `CANCEL ORDERS` — discards the pending queue without placing anything.
+
+Both commands only work from a channel listed in `ALLOWED_CHANNELS`.
+
 ### 🚀 Order Placement Alerts
 
-The bot also sends a short alert to the **same summary channel** whenever an order is successfully placed/executed (market fills immediately, trigger entries are placed as pending). It shows the symbol, direction, leverage, entry, SL/TP, volume, notional, risk and the order ID:
+Once `CONFIRM ORDERS` is sent, the bot also posts a short alert to the **summary channel** for each order that is successfully placed/executed (market fills immediately, trigger entries are placed as pending). It shows the symbol, direction, leverage, entry, SL/TP, volume, notional, risk and the order ID:
 
 ```
 🚀 ORDER PLACED
