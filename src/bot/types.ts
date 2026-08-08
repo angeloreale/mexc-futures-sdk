@@ -122,6 +122,9 @@ export interface BotConfig {
   telegramBotToken: string;
   /** Allowed Telegram channel/chat IDs (numeric or @username strings) */
   allowedChannels: string[];
+  /** Channels where signals are queued for operator confirmation ("CONFIRM ORDERS").
+   *  Empty = all allowed channels auto-place immediately. */
+  confirmChannels: string[];
 
   /** Default leverage */
   leverage: number;

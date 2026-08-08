@@ -191,6 +191,12 @@ export class SignalBot {
     this.logger.info(
       `   Channels: ${this.config.allowedChannels.join(", ")}`
     );
+    const confirmCh = this.config.confirmChannels;
+    this.logger.info(
+      confirmCh.length > 0
+        ? `   Confirm (queue+approve): ${confirmCh.join(", ")} — other allowed channels auto-place`
+        : `   Confirm: disabled (CONFIRM_CHANNELS not set) — all allowed channels auto-place`
+    );
     if (this.config.signalResolverChannels.length > 0) {
       this.logger.info(
         `   Resolver channels: ${this.config.signalResolverChannels.join(", ")} (info-only, no trading)`
@@ -1650,28 +1656,35 @@ export class SignalBot {
       return; // silently ignore
     }
 
+    // Whether this channel uses the queue+confirmation flow (listed in
+    // CONFIRM_CHANNELS). Other allowed channels place orders automatically.
+    const isConfirmChannel = this.isConfirmChannel(chatId, chatUsername);
+
     // Queue commands — signals are queued but NOT placed until the operator
     // confirms: "CONFIRM ORDERS" places every queued order, "CANCEL ORDERS"
-    // discards the pending queue without placing anything.
-    if (/^confirm\s+orders?\s*$/i.test(text.trim())) {
-      await this.handleConfirmOrders(chatId, messageId);
-      return;
-    }
-    if (/^cancel\s+orders?\s*$/i.test(text.trim())) {
-      await this.handleCancelQueue(chatId, messageId);
-      return;
-    }
+    // discards the pending queue without placing anything. Only honored on
+    // channels configured for the confirmation flow (CONFIRM_CHANNELS).
+    if (isConfirmChannel) {
+      if (/^confirm\s+orders?\s*$/i.test(text.trim())) {
+        await this.handleConfirmOrders(chatId, messageId);
+        return;
+      }
+      if (/^cancel\s+orders?\s*$/i.test(text.trim())) {
+        await this.handleCancelQueue(chatId, messageId);
+        return;
+      }
 
-    // Cancel a single queued order by its queue ID: "CANCEL Q2" — removes
-    // only that order from the pending queue, leaving the rest intact.
-    const cancelQueuedMatch = /^cancel\s+(Q\d+)\s*$/i.exec(text.trim());
-    if (cancelQueuedMatch) {
-      await this.handleCancelQueuedOrder(
-        cancelQueuedMatch[1],
-        chatId,
-        messageId
-      );
-      return;
+      // Cancel a single queued order by its queue ID: "CANCEL Q2" — removes
+      // only that order from the pending queue, leaving the rest intact.
+      const cancelQueuedMatch = /^cancel\s+(Q\d+)\s*$/i.exec(text.trim());
+      if (cancelQueuedMatch) {
+        await this.handleCancelQueuedOrder(
+          cancelQueuedMatch[1],
+          chatId,
+          messageId
+        );
+        return;
+      }
     }
 
     // Cancel command: "CANCEL {SYMBOL} {DIRECTION}" — finds pending plan
@@ -1749,7 +1762,7 @@ export class SignalBot {
 
     // Process each signal sequentially
     for (const signal of signals) {
-      await this.processSignal(signal);
+      await this.processSignal(signal, isConfirmChannel ? "confirm" : "auto");
     }
   }
 
@@ -1829,7 +1842,10 @@ export class SignalBot {
   /**
    * Full pipeline: normalize → resolve → size → execute.
    */
-  private async processSignal(signal: TradeSignal): Promise<void> {
+  private async processSignal(
+    signal: TradeSignal,
+    mode: "confirm" | "auto" = "auto"
+  ): Promise<void> {
     // 1. Normalize symbol
     const mexcSymbol = normalizeSymbol(signal.rawSymbol);
     if (!mexcSymbol) {
@@ -1935,10 +1951,33 @@ export class SignalBot {
       `📐 Sized: ${resolvedTrade.volume} contracts, ${resolvedTrade.side === 1 ? "LONG" : "SHORT"}, leverage ${resolvedTrade.leverage}x`
     );
 
-    // 6. Queue the order — nothing is submitted to MEXC until the operator
-    // confirms with "CONFIRM ORDERS". Sending the confirmation message here
-    // lets the channel verify expected TP/SL (including fees) before any
-    // order is actually placed.
+    // 6. Route based on the channel mode:
+    //    - "confirm" channels: queue the order and post a confirmation.
+    //      Nothing is submitted to MEXC until "CONFIRM ORDERS".
+    //    - "auto" channels (monitor feeds): place the order immediately.
+    if (mode === "auto") {
+      this.logger.info(
+        `⚡ Auto-placing ${resolvedTrade.mexcSymbol} ${resolvedTrade.side === 1 ? "LONG" : "SHORT"}`
+      );
+      const records = await this.executor.execute(resolvedTrade);
+      for (const record of records) {
+        if (record.success) {
+          this.logger.info(
+            `✅ Trade executed (auto): ${record.orderId} for ${resolvedTrade.mexcSymbol}`
+          );
+          if (!this.config.dryRun) {
+            await this.sendOrderPlacedNotification(record);
+            this.registerSlTp(record);
+          }
+        } else {
+          this.logger.error(
+            `❌ Trade failed (auto): ${record.error} for ${resolvedTrade.mexcSymbol}`
+          );
+        }
+      }
+      return;
+    }
+
     const queued: QueuedOrder = {
       id: `Q${++this.queueCounter}`,
       trade: resolvedTrade,
@@ -2048,6 +2087,26 @@ export class SignalBot {
       return true;
     }
 
+    return false;
+  }
+
+  /**
+   * Check if a chat uses the queue + operator-confirmation flow (listed in
+   * CONFIRM_CHANNELS). Channels NOT listed here place orders automatically.
+   */
+  private isConfirmChannel(chatId: string, username?: string): boolean {
+    if (this.config.confirmChannels.length === 0) return false;
+    if (this.config.confirmChannels.includes(chatId)) return true;
+    if (
+      username &&
+      this.config.confirmChannels.some(
+        (ch) =>
+          ch === `@${username}` ||
+          ch.toLowerCase() === username.toLowerCase()
+      )
+    ) {
+      return true;
+    }
     return false;
   }
 }

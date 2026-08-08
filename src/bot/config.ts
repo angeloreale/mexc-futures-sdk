@@ -32,6 +32,15 @@ export function loadConfig(): BotConfig {
     );
   }
 
+  // Channels that use the queue + operator-confirmation flow ("CONFIRM ORDERS").
+  // Signals from these channels are queued but NOT placed until confirmed.
+  // Allowed channels NOT listed here place orders automatically.
+  // Empty (default) = all allowed channels auto-place immediately.
+  const confirmChannels = (env.CONFIRM_CHANNELS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
   const leverage = parseFloat(env.DEFAULT_LEVERAGE || "10");
   const openType = env.OPEN_TYPE === "2" ? 2 : 1; // default isolated
 
@@ -110,6 +119,7 @@ export function loadConfig(): BotConfig {
     mexcAuthToken,
     telegramBotToken,
     allowedChannels,
+    confirmChannels,
     leverage,
     openType: openType as 1 | 2,
     riskPercent,

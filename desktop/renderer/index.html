@@ -68,6 +68,10 @@
           <label for="ALLOWED_CHANNELS">Allowed Channels <small>(comma-separated IDs or @usernames)</small></label>
           <input type="text" id="ALLOWED_CHANNELS" placeholder="-1001234567890,@signals_channel" />
         </div>
+        <div class="field">
+          <label for="CONFIRM_CHANNELS">Confirm Channels <small>(subset — queue for approval; empty = auto-place all)</small></label>
+          <input type="text" id="CONFIRM_CHANNELS" placeholder="-1001234567890" />
+        </div>
       </fieldset>
 
       <fieldset>
@@ -135,6 +139,13 @@
             <select id="USE_LIMIT_TP_SL">
               <option value="false">Off (Market TP/SL)</option>
               <option value="true">On (Limit / Maker TP/SL)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="SPLIT_MULTI_TP">Multi-TP Split <small>(split volume across TP targets; single order if off)</small></label>
+            <select id="SPLIT_MULTI_TP">
+              <option value="false">Off (TP1 only)</option>
+              <option value="true">On (split across TPs)</option>
             </select>
           </div>
         </div>

@@ -135,6 +135,7 @@ All settings are environment variables. Copy `.env.example` and fill in:
 | `MEXC_SECRET_KEY` | — | MEXC API secret key |
 | `TELEGRAM_BOT_TOKEN` | — | Telegram Bot token from @BotFather |
 | `ALLOWED_CHANNELS` | — | Comma-separated channel IDs or usernames |
+| `CONFIRM_CHANNELS` | — | Subset of `ALLOWED_CHANNELS` where signals are **queued** (awaiting `CONFIRM ORDERS`). Channels not listed here auto-place immediately. Leave empty to disable the confirmation flow entirely. |
 | **Trading** | | |
 | `DEFAULT_LEVERAGE` | `10` | Leverage (1–200) |
 | `OPEN_TYPE` | `1` | `1` = isolated margin, `2` = cross margin |
@@ -356,9 +357,16 @@ Close 1462152523 30%
 
 The position ID is preferred because it always exists on the open-positions API and carries the authoritative position direction, so closing by it never hits MEXC's "wrong direction" error (important in hedge mode, where a symbol can hold both a LONG and a SHORT simultaneously). For backward compatibility the command still accepts a MEXC fill order ID or plan/trigger order ID, which are resolved via the API. The command is idempotent and requires the channel to be in `ALLOWED_CHANNELS`.
 
-### 🧾 Trade Confirmations & Order Queue
+### 🧾 Trade Confirmations & Order Queue (per-channel opt-in)
 
-Signals are **not** placed immediately. When a valid signal is parsed and sized, the bot **queues** the order and sends a **trade confirmation** to the allowed channel the signal came from — showing the expected TP and expected SL, plus the estimated realized PNL **net of fees** when the contract fee rates are known:
+By default, signals from **all** `ALLOWED_CHANNELS` are placed **automatically** (no queue, no confirmation step). You can enable the queue+confirmation flow on specific channels by listing them in `CONFIRM_CHANNELS`:
+
+| Channel in `CONFIRM_CHANNELS`? | Behaviour |
+|---|---|
+| Yes | Signal is **queued** — a trade confirmation is posted, and the order is **not** placed until the operator sends `CONFIRM ORDERS` |
+| No | Signal is **auto-placed** immediately (no confirmation message) |
+
+When the confirmation flow is active for a channel, a valid signal is parsed and sized, then the bot **queues** the order and sends a **trade confirmation** to the channel — showing the expected TP and expected SL, plus the estimated realized PNL **net of fees** when the contract fee rates are known:
 
 ```
 🧾 TRADE CONFIRMATION
@@ -380,7 +388,7 @@ The operator then decides what happens to the pending queue:
 - `CONFIRM ORDERS` — places **every** queued order (market orders fill immediately, trigger entries are submitted as pending plan orders). Confirmation is idempotent per message.
 - `CANCEL ORDERS` — discards the pending queue without placing anything.
 
-Both commands only work from a channel listed in `ALLOWED_CHANNELS`.
+Both commands only work from a channel listed in `CONFIRM_CHANNELS`.
 
 ### 🚀 Order Placement Alerts
 
