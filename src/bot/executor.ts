@@ -709,11 +709,17 @@ export class TradeExecutor {
     // Get the distribution percentages, normalized to sum to 100.
     let dist: number[];
     if (this.config.tpDistribution.length > 0) {
-      // Use user-configured distribution, pad/truncate to n items.
-      dist = this.config.tpDistribution.slice(0, n);
-      while (dist.length < n) {
-        // Pad with the last value repeated.
-        dist.push(dist[dist.length - 1] || 1);
+      const userLen = this.config.tpDistribution.length;
+      if (n <= userLen) {
+        // Signal has ≤ TPs than configured: truncate and re-normalize.
+        // e.g. user=[60,30,10], signal has 2 TPs → [60,30] → norm → [67,33].
+        dist = this.config.tpDistribution.slice(0, n);
+      } else {
+        // Signal has MORE TPs than configured: use user dist for the first
+        // userLen levels, then fill the rest with Fibonacci proportions.
+        // e.g. user=[60,30], signal has 4 TPs → [60,30] + fib(2) → normalized.
+        const fibTail = fibonacciTpDistribution(n - userLen);
+        dist = [...this.config.tpDistribution, ...fibTail];
       }
     } else {
       // Fibonacci default.
