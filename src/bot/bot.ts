@@ -7,6 +7,7 @@ import { parseSignals, normalizeSymbol } from "./parser";
 import { ContractResolver } from "./resolver";
 import { calculatePositionSize } from "./sizer";
 import { TradeExecutor } from "./executor";
+import { PendingPlanTpSl } from "./executor";
 import { BotState } from "./state";
 import { SignalResolver } from "./signalResolver";
 import { formatSignalResolutionMessage } from "./signalResolutionMessage";
@@ -70,6 +71,13 @@ export class SignalBot {
   private orderQueue: ResolvedTrade[] = [];
   /** Signal resolver: monitors resolver-channel signals for TP/SL hits (null when disabled). */
   private signalResolver: SignalResolver | null = null;
+  /**
+   * Pending plan (trigger) orders that were placed WITHOUT take-profit
+   * attached. When the position monitor detects the plan has triggered
+   * and a new position appears, we place limit (maker) TP orders.
+   * Keyed by externalOid (unique per plan order).
+   */
+  private pendingPlanOrders = new Map<string, PendingPlanTpSl>();
 
   constructor(config: BotConfig) {
     this.config = config;
@@ -95,7 +103,19 @@ export class SignalBot {
 
     // Initialize subsystems
     this.resolver = new ContractResolver(this.mexcClient, this.logger);
-    this.executor = new TradeExecutor(this.mexcClient, config, this.logger);
+    this.executor = new TradeExecutor(
+      this.mexcClient,
+      config,
+      this.logger,
+      (externalOid, details) => {
+        this.pendingPlanOrders.set(externalOid, details);
+        this.logger.info(
+          `📝 Deferred TP for plan order ${externalOid}: ${details.symbol} ` +
+          `${details.positionType === 1 ? "LONG" : "SHORT"} ` +
+          `${details.tpTargets.length} TP(s), SL=${details.sl}, vol=${details.vol}`
+        );
+      },
+    );
     this.state = new BotState(config.stateFilePath, this.logger);
 
     // Position-close PNL notifications (only when a channel is configured)
@@ -128,6 +148,9 @@ export class SignalBot {
       slTpRetentionDays: config.logRetentionDays,
       onSample: (positions) => this.pnlMonitor?.feedPositions(positions),
       requestSpacingMs: config.orderRateIntervalMs,
+      // When a plan order triggers and a new position appears, place the
+      // deferred limit (maker) TP orders to minimize fees.
+      onNewPosition: (positions) => { void this.handleNewPositions(positions); },
     });
 
     // Signal resolver: monitors resolver-channel signals for TP/SL hits
@@ -315,6 +338,44 @@ export class SignalBot {
         "❌ Failed to send position summary:",
         error instanceof Error ? error.message : error
       );
+    }
+  }
+
+  /**
+   * Handle new positions detected by the summary monitor (e.g. plan orders
+   * that just triggered). Matches against pending plan orders and places
+   * deferred limit (maker) TP orders, reusing the existing SL already
+   * attached to the plan order for safety.
+   */
+  private async handleNewPositions(positions: Position[]): Promise<void> {
+    if (this.pendingPlanOrders.size === 0) return;
+
+    for (const pos of positions) {
+      for (const [oid, details] of this.pendingPlanOrders) {
+        if (
+          details.symbol === pos.symbol &&
+          details.positionType === pos.positionType
+        ) {
+          this.logger.info(
+            `🔄 Plan order triggered: ${pos.symbol} ${pos.positionType === 1 ? "LONG" : "SHORT"} ` +
+            `posId=${pos.positionId} — placing deferred limit TPs`
+          );
+          await this.executor.placeDeferredLimitTpSl(
+            pos.positionId,
+            details,
+          );
+          this.pendingPlanOrders.delete(oid);
+          break;
+        }
+      }
+    }
+
+    // Safety net: clear if the map grows too large (stale entries).
+    if (this.pendingPlanOrders.size > 50) {
+      this.logger.warn(
+        `⚠️ Pending plan orders map has ${this.pendingPlanOrders.size} entries — clearing`
+      );
+      this.pendingPlanOrders.clear();
     }
   }
 
@@ -870,9 +931,10 @@ export class SignalBot {
       // Resolve realized PNL from position history so the close confirmation
       // includes it. Only meaningful for full closes in live mode — partial
       // closes leave the position open, and dry runs place no order.
+      const fallbackMargin = position.oim || position.im || 0;
       const pnl =
         !isPartial && !this.config.dryRun
-          ? await this.fetchClosedPnl(symbol, positionType, position.positionId)
+          ? await this.fetchClosedPnl(symbol, positionType, position.positionId, fallbackMargin)
           : null;
       await this.sendCloseResult({
         status: this.config.dryRun ? "dry-run" : "success",
@@ -901,13 +963,16 @@ export class SignalBot {
    * Fetch the realized PNL for a just-closed position from MEXC position
    * history. History can lag the close order slightly, so it retries briefly.
    *
+   * @param fallbackMargin Margin from the open-position snapshot, used when
+   *                       the history record returns oim/im as 0 (common).
    * @returns `{ realisedPnl, pnlPercent }` when the closed record is found,
    *          or null when it can't be resolved (caller omits the PNL line).
    */
   private async fetchClosedPnl(
     symbol: string,
     positionType: 1 | 2,
-    positionId: number
+    positionId: number,
+    fallbackMargin = 0,
   ): Promise<{ realisedPnl: number; pnlPercent: number } | null> {
     const maxAttempts = 4;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -923,7 +988,8 @@ export class SignalBot {
           (p) => String(p.positionId) === String(positionId)
         );
         if (found) {
-          const margin = found.oim || found.im || 0;
+          const historyMargin = found.oim || found.im || 0;
+          const margin = historyMargin > 0 ? historyMargin : fallbackMargin;
           const realisedPnl = Number.isFinite(found.realised) ? found.realised : 0;
           return {
             realisedPnl,

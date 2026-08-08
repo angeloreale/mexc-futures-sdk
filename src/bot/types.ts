@@ -180,6 +180,14 @@ export interface BotConfig {
 
   /** How often (seconds) to poll MEXC tickers for signal resolution checks (min 5, default 15). */
   signalResolverIntervalSeconds: number;
+
+  /**
+   * When true, a signal with multiple TP targets (e.g. TP1/TP2/TP3) splits
+   * the total volume equally into separate orders — one per TP — each with
+   * its own entry and exit fees. When false (default), only the first TP is
+   * used and a single entry order is placed with all volume, minimizing fees.
+   */
+  splitMultiTp: boolean;
 }
 
 /**

@@ -6,17 +6,49 @@ import { BotConfig, ResolvedTrade, TradeRecord } from "./types";
 import { Logger } from "../utils/logger";
 
 /**
+ * Details of a plan (trigger) order that was placed WITHOUT attached TP/SL.
+ * When the plan triggers and the position opens, the bot calls
+ * {@link TradeExecutor.placeDeferredLimitTpSl} to attach limit (maker) TP/SL.
+ */
+export interface PendingPlanTpSl {
+  /** MEXC contract symbol. */
+  symbol: string;
+  /** Position direction: 1 = long, 2 = short. */
+  positionType: 1 | 2;
+  /** All take-profit targets (prices). */
+  tpTargets: number[];
+  /** Stop-loss price. */
+  sl: number;
+  /** Total entry volume (contracts). */
+  vol: number;
+  /** Leverage used. */
+  leverage: number;
+  /** Open type: 1 = isolated, 2 = cross. */
+  openType: 1 | 2;
+}
+
+/** Called when a plan order is placed without TP/SL so the bot can store it. */
+export type OnPlanOrderDeferred = (externalOid: string, details: PendingPlanTpSl) => void;
+
+/**
  * Executes a resolved trade by submitting orders to MEXC.
  */
 export class TradeExecutor {
   private client: MexcFuturesSDK;
   private config: BotConfig;
   private logger: Logger;
+  private onPlanDeferred: OnPlanOrderDeferred | undefined;
 
-  constructor(client: MexcFuturesSDK, config: BotConfig, logger: Logger) {
+  constructor(
+    client: MexcFuturesSDK,
+    config: BotConfig,
+    logger: Logger,
+    onPlanDeferred?: OnPlanOrderDeferred,
+  ) {
     this.client = client;
     this.config = config;
     this.logger = logger;
+    this.onPlanDeferred = onPlanDeferred;
   }
 
   /**
@@ -201,67 +233,69 @@ export class TradeExecutor {
 
   /**
    * Shared split-and-submit logic for both market and trigger orders.
-   * Splits volume across multiple TP targets if needed.
+   *
+   * When `splitMultiTp` is enabled with multiple TP targets:
+   *   - Market orders: 1 entry order (SL attached, NO TP) + N partial limit
+   *     TP orders placed after the fill. This saves (N-1) entry taker fees.
+   *   - Plan orders: the SL is ALWAYS attached to the plan order for safety.
+   *     TP is deferred — stored via onPlanDeferred and placed as limit
+   *     (maker) orders when the position opens.
+   *
+   * When `splitMultiTp` is disabled or there's only 1 TP:
+   *   Single entry order, no splitting.
    */
   private async splitAndSubmit(trade: ResolvedTrade, isTrigger: boolean): Promise<TradeRecord[]> {
     const records: TradeRecord[] = [];
 
-    if (trade.allTpTargets.length <= 1) {
-      const record = await this.submitSingleOrder(trade, trade.volume, trade.takeProfitPrice, isTrigger);
-      records.push(record);
-      this.logTradeRecord(record);
-      return records;
-    }
-
-    // Multiple TP targets: split volume equally, respecting contract precision.
-    const { minVol, volScale, volUnit } = trade;
-    const maxSplits = Math.floor(trade.volume / minVol);
-    if (maxSplits < 2) {
-      this.logger.info(
-        `📎 Volume ${trade.volume} too small to split across ${trade.allTpTargets.length} TPs (minVol=${minVol}) — using single TP=${trade.takeProfitPrice}`
-      );
-      const record = await this.submitSingleOrder(trade, trade.volume, trade.takeProfitPrice, isTrigger);
-      records.push(record);
-      this.logTradeRecord(record);
-      return records;
-    }
-
-    const targetCount = Math.min(trade.allTpTargets.length, maxSplits);
-    if (targetCount < trade.allTpTargets.length) {
-      this.logger.info(
-        `📎 Volume ${trade.volume} can only split across ${targetCount}/${trade.allTpTargets.length} TPs (minVol=${minVol})`
-      );
-    }
-
-    const roundVol = (v: number): number => {
-      const stepped = Math.floor(v / volUnit) * volUnit;
-      if (volScale > 0) {
-        const factor = Math.pow(10, volScale);
-        return Math.floor(stepped * factor) / factor;
-      }
-      return stepped;
-    };
-
-    const rawPerTarget = trade.volume / targetCount;
-    const volPerTarget = roundVol(rawPerTarget);
-    const used = volPerTarget * targetCount;
-    const remainder = roundVol(trade.volume - used);
-
-    for (let i = 0; i < targetCount; i++) {
-      const vol = i === 0 ? volPerTarget + remainder : volPerTarget;
-      if (vol < minVol) continue;
-
-      const tp = trade.allTpTargets[i];
-      const record = await this.submitSingleOrder(trade, vol, tp, isTrigger);
-      records.push(record);
-      this.logTradeRecord(record);
-
-      if (!record.success) {
-        this.logger.error(
-          `❌ Order ${i + 1}/${targetCount} failed — aborting remaining splits`
+    // Single TP, or splitting disabled → one order with all volume.
+    if (trade.allTpTargets.length <= 1 || !this.config.splitMultiTp) {
+      if (trade.allTpTargets.length > 1 && !this.config.splitMultiTp) {
+        this.logger.info(
+          `📎 Signal has ${trade.allTpTargets.length} TP targets but SPLIT_MULTI_TP is disabled — using TP1=${trade.takeProfitPrice} only, single order`
         );
-        break;
       }
+      const record = await this.submitSingleOrder(trade, trade.volume, trade.takeProfitPrice, isTrigger);
+      records.push(record);
+      this.logTradeRecord(record);
+      return records;
+    }
+
+    // ── Multi-TP splitting enabled ──────────────────────────────────
+
+    // For plan orders: place 1 plan order with SL attached (safety!),
+    // defer all TPs to be placed as limit orders after the position opens.
+    if (isTrigger) {
+      this.logger.info(
+        `📎 Multi-TP plan order for ${trade.mexcSymbol}: 1 entry with SL, ` +
+        `${trade.allTpTargets.length} limit TPs deferred until position opens`
+      );
+      // The plan order carries the SL but NO TP — all TPs are deferred.
+      const record = await this.submitSingleOrder(trade, trade.volume, trade.takeProfitPrice, true);
+      records.push(record);
+      this.logTradeRecord(record);
+      return records;
+    }
+
+    // Market order with multi-TP: 1 entry (SL attached, NO TP) +
+    // N partial limit TP orders placed after the fill.
+    this.logger.info(
+      `📎 Multi-TP market order for ${trade.mexcSymbol}: 1 entry + ` +
+      `${trade.allTpTargets.length} partial limit TPs`
+    );
+
+    // Place the entry order WITHOUT TP attached — we'll add limit TPs after fill.
+    const entryRecord = await this.submitSingleOrder(
+      trade, trade.volume, trade.takeProfitPrice, false
+    );
+    records.push(entryRecord);
+    this.logTradeRecord(entryRecord);
+
+    if (entryRecord.success && entryRecord.orderId && entryRecord.orderId !== "unknown") {
+      await this.attachMultiLimitTps(trade, entryRecord.orderId);
+    } else if (entryRecord.success) {
+      this.logger.error(
+        `❌ Multi-TP: entry filled but no orderId — TP orders NOT placed for ${trade.mexcSymbol}`
+      );
     }
 
     return records;
@@ -298,11 +332,6 @@ export class TradeExecutor {
     const externalOid = `tg_${hash}`;
 
     if (isTrigger) {
-      if (this.config.useLimitTpSl) {
-        this.logger.warn(
-          `⚠️ USE_LIMIT_TP_SL is enabled, but stop-entry (plan) orders can't attach limit TP/SL until the position actually opens — keeping MARKET TP/SL for ${trade.mexcSymbol} trigger order (limit TP/SL applies to market entries).`
-        );
-      }
       const isBuy = trade.side === 1;
       const entry = trade.entry;
       const cp = trade.currentPrice;
@@ -342,6 +371,10 @@ export class TradeExecutor {
       }
 
       // Plan order (stop/conditional entry) via /planorder/place/v2.
+      // SL is ALWAYS attached for safety. TP is deferred — stored via
+      // onPlanDeferred and placed as limit (maker) orders when the
+      // position opens, saving taker fees on the take-profit side.
+      const deferTp = this.config.useLimitTpSl || this.config.splitMultiTp;
       const planParams: SubmitPlanOrderRequest = {
         symbol: trade.mexcSymbol,
         triggerPrice: entry,
@@ -353,18 +386,38 @@ export class TradeExecutor {
         leverage: trade.leverage,
         side: trade.side,
         openType: trade.openType,
-        stopLossPrice: trade.stopLossPrice,
-        takeProfitPrice: takeProfitPrice,
+        stopLossPrice: trade.stopLossPrice, // SL always attached — safety first!
+        // TP deferred when useLimitTpSl or multi-TP splitting is active
+        ...(deferTp ? {} : { takeProfitPrice }),
         externalOid,
       };
 
+      const tpLabel = deferTp
+        ? `${trade.allTpTargets.length} TP(s) deferred (limit/maker after position opens)`
+        : `TP=${takeProfitPrice}`;
       this.logger.info(
-        `🎯 Plan/Stop entry: ${trade.mexcSymbol} ${isBuy ? "LONG" : "SHORT"} ${dirLabel} trigger@${entry} (current=${cp}) vol=${volume} SL=${trade.stopLossPrice} TP=${takeProfitPrice}`
+        `🎯 Plan/Stop entry: ${trade.mexcSymbol} ${isBuy ? "LONG" : "SHORT"} ${dirLabel} trigger@${entry} (current=${cp}) vol=${volume} SL=${trade.stopLossPrice} ${tpLabel}`
       );
 
       try {
         const response = await this.client.submitPlanOrder(planParams);
-        return this.toTradeRecord(trade, response as SubmitOrderResponse, volume, takeProfitPrice);
+        const record = this.toTradeRecord(trade, response as SubmitOrderResponse, volume, takeProfitPrice);
+
+        // If TP is deferred, notify the bot so it can place limit TP orders
+        // when the position opens (detected by the position monitor).
+        if (deferTp && record.success && this.onPlanDeferred) {
+          this.onPlanDeferred(externalOid, {
+            symbol: trade.mexcSymbol,
+            positionType: trade.side === 1 ? 1 : 2,
+            tpTargets: trade.allTpTargets,
+            sl: trade.stopLossPrice,
+            vol: volume,
+            leverage: trade.leverage,
+            openType: trade.openType,
+          });
+        }
+
+        return record;
       } catch (error) {
         return this.toErrorRecord(trade, error, volume, takeProfitPrice);
       }
@@ -372,6 +425,14 @@ export class TradeExecutor {
 
     // Market order — immediate fill
     const useLimitTpSl = this.config.useLimitTpSl;
+    const multiTp = this.config.splitMultiTp && trade.allTpTargets.length > 1;
+
+    // When using limit TP/SL or multi-TP splitting, we do NOT attach TP to the
+    // entry order — it will be placed as limit (maker) orders after the fill.
+    // SL is ALWAYS attached (either inline or via stoporder/place after fill).
+    const attachTpInline = !useLimitTpSl && !multiTp;
+    const attachSlInline = !useLimitTpSl;
+
     const orderParams: SubmitOrderRequest = {
       symbol: trade.mexcSymbol,
       price: trade.entry,
@@ -380,31 +441,41 @@ export class TradeExecutor {
       type: 5, // market
       openType: trade.openType,
       leverage: trade.leverage,
-      // In Limit (maker) TP/SL mode we do NOT attach TP/SL to the entry order —
-      // they are placed afterwards as Stop-Limit orders (see below). Otherwise
-      // MEXC would create MARKET (taker) TP/SL, which is what we're avoiding.
-      ...(useLimitTpSl
-        ? {}
-        : { stopLossPrice: trade.stopLossPrice, takeProfitPrice }),
+      ...(attachSlInline ? { stopLossPrice: trade.stopLossPrice } : {}),
+      ...(attachTpInline ? { takeProfitPrice } : {}),
       externalOid,
     };
 
+    const tpLabel = multiTp
+      ? `${trade.allTpTargets.length} partial limit TPs (${attachSlInline ? "SL inline" : "SL after fill"})`
+      : useLimitTpSl
+        ? "TP/SL as LIMIT after fill"
+        : `SL=${trade.stopLossPrice} TP=${takeProfitPrice}`;
+
     this.logger.info(
-      `🚀 Market order: ${trade.mexcSymbol} ${trade.side === 1 ? "LONG" : "SHORT"} price=${trade.entry} vol=${volume}` +
-      (useLimitTpSl
-        ? ` — TP/SL to be attached as LIMIT (maker) orders`
-        : ` SL=${trade.stopLossPrice} TP=${takeProfitPrice}`)
+      `🚀 Market order: ${trade.mexcSymbol} ${trade.side === 1 ? "LONG" : "SHORT"} price=${trade.entry} vol=${volume} · ${tpLabel}`
     );
 
     try {
       const response: SubmitOrderResponse = await this.client.submitOrder(orderParams);
       const record = this.toTradeRecord(trade, response, volume, takeProfitPrice);
 
-      // Limit (maker) TP/SL mode: the entry order was submitted WITHOUT attached
-      // TP/SL, so now attach Stop-Limit TP + SL to the opened position.
-      if (useLimitTpSl && record.success && record.orderId && record.orderId !== "unknown") {
-        await this.attachLimitTpSlAfterFill(trade, volume, takeProfitPrice, record.orderId);
+      // After-fill TP/SL placement: needed when TP/SL was NOT attached inline.
+      if (record.success && record.orderId && record.orderId !== "unknown") {
+        if (multiTp) {
+          // Multi-TP: place N partial limit TPs + 1 limit SL
+          await this.attachMultiLimitTps(trade, record.orderId);
+        } else if (useLimitTpSl) {
+          // Single TP, limit mode: place 1 limit TP + 1 limit SL
+          await this.attachLimitTpSlAfterFill(trade, volume, takeProfitPrice, record.orderId);
+        }
+      } else if (record.success && (multiTp || useLimitTpSl)) {
+        this.logger.error(
+          `❌ Entry filled but no orderId — TP/SL NOT placed for ${trade.mexcSymbol}! ` +
+          `Close manually or set SL/TP in MEXC UI immediately.`
+        );
       }
+
       return record;
     } catch (error) {
       return this.toErrorRecord(trade, error, volume, takeProfitPrice);
@@ -614,6 +685,219 @@ export class TradeExecutor {
       orderVolume: volume,
       orderTp: takeProfitPrice,
     };
+  }
+
+  /**
+   * Place N partial limit (maker) TP orders + 1 limit SL for a position that
+   * just opened from a single market entry order. Used by multi-TP splitting
+   * to avoid N separate entry orders (and their taker fees).
+   *
+   * Volume is split equally across the TP targets. The SL covers the full
+   * position volume. All orders use the limit (maker) order type for reduced
+   * fees; if a limit placement fails, falls back to market.
+   */
+  private async attachMultiLimitTps(
+    trade: ResolvedTrade,
+    orderId: string,
+  ): Promise<void> {
+    const positionType: 1 | 2 = trade.side === 1 ? 1 : 2;
+
+    const positionId = await this.resolvePositionId(trade.mexcSymbol, positionType, orderId);
+    if (!positionId) {
+      this.logger.error(
+        `❌ Multi-TP: could not resolve positionId for ${trade.mexcSymbol} (order ${orderId}) — TP/SL NOT placed!`
+      );
+      return;
+    }
+
+    const targets = trade.allTpTargets;
+    const n = targets.length;
+    const { volUnit } = trade;
+
+    // Split volume equally, respecting contract precision.
+    const roundVol = (v: number): number => {
+      const stepped = Math.floor(v / volUnit) * volUnit;
+      if (trade.volScale > 0) {
+        const factor = Math.pow(10, trade.volScale);
+        return Math.floor(stepped * factor) / factor;
+      }
+      return stepped;
+    };
+
+    const rawPerTarget = trade.volume / n;
+    let volPerTarget = roundVol(rawPerTarget);
+    if (volPerTarget <= 0) volPerTarget = volUnit;
+
+    // 1) SL FIRST (always, for the full volume).
+    this.logger.info(
+      `🛡️ Multi-TP: placing LIMIT SL for ${trade.mexcSymbol} posId=${positionId} vol=${trade.volume} @ ${trade.stopLossPrice}`
+    );
+    const slPlaced = await this.placeStopOrder(
+      {
+        symbol: trade.mexcSymbol,
+        positionId,
+        vol: trade.volume,
+        lossTrend: 1,
+        stopLossPrice: trade.stopLossPrice,
+        stopLossType: 1,
+        stopLossOrderPrice: trade.stopLossPrice,
+      },
+      "Limit SL"
+    );
+    if (!slPlaced) {
+      await this.placeStopOrder(
+        {
+          symbol: trade.mexcSymbol,
+          positionId,
+          vol: trade.volume,
+          lossTrend: 1,
+          stopLossPrice: trade.stopLossPrice,
+        },
+        "Market SL (fallback)"
+      );
+    }
+
+    // 2) N partial limit TP orders, one per target.
+    // Last TP gets any rounding remainder.
+    let placed = 0;
+    for (let i = 0; i < n; i++) {
+      // Last target gets the remaining volume.
+      const isLast = i === n - 1;
+      const tpVol = isLast
+        ? roundVol(trade.volume - placed)
+        : volPerTarget;
+      if (tpVol <= 0) continue;
+      placed += tpVol;
+
+      const tpPrice = targets[i];
+      this.logger.info(
+        `🎯 Multi-TP [${i + 1}/${n}]: placing LIMIT TP for ${trade.mexcSymbol} ` +
+        `posId=${positionId} vol=${tpVol} @ ${tpPrice}`
+      );
+
+      const tpPlaced = await this.placeStopOrder(
+        {
+          symbol: trade.mexcSymbol,
+          positionId,
+          vol: tpVol,
+          profitTrend: 1,
+          takeProfitPrice: tpPrice,
+          takeProfitType: 1,
+          takeProfitOrderPrice: tpPrice,
+        },
+        `Limit TP${i + 1}`
+      );
+      if (!tpPlaced) {
+        await this.placeStopOrder(
+          {
+            symbol: trade.mexcSymbol,
+            positionId,
+            vol: tpVol,
+            profitTrend: 1,
+            takeProfitPrice: tpPrice,
+          },
+          `Market TP${i + 1} (fallback)`
+        );
+      }
+    }
+  }
+
+  /**
+   * Place limit (maker) TP/SL orders for a position that opened from a
+   * previously-deferred plan order. Called by the bot when the position
+   * monitor detects the plan order has triggered and the position is open.
+   *
+   * SL is placed first for safety. For multi-TP, volume is split equally
+   * across partial limit TP orders. Falls back to market orders on failure.
+   *
+   * @returns true when at least the SL was placed successfully.
+   */
+  async placeDeferredLimitTpSl(
+    positionId: number,
+    details: PendingPlanTpSl,
+  ): Promise<boolean> {
+    const { symbol, positionType, tpTargets, sl, vol, leverage, openType } = details;
+    const n = tpTargets.length;
+    this.logger.info(
+      `🔄 Placing deferred limit TP/SL for ${symbol} posId=${positionId}: ` +
+      `${n} TP(s), SL=${sl}, vol=${vol}`
+    );
+
+    // 1) SL FIRST — non-negotiable safety net.
+    const slPlaced = await this.placeStopOrder(
+      {
+        symbol,
+        positionId,
+        vol,
+        lossTrend: 1,
+        stopLossPrice: sl,
+        stopLossType: 1,
+        stopLossOrderPrice: sl,
+      },
+      "Deferred Limit SL"
+    );
+    if (!slPlaced) {
+      // Market SL fallback — any SL is better than none.
+      const mktSl = await this.placeStopOrder(
+        {
+          symbol,
+          positionId,
+          vol,
+          lossTrend: 1,
+          stopLossPrice: sl,
+        },
+        "Deferred Market SL (fallback)"
+      );
+      if (!mktSl) {
+        this.logger.error(
+          `❌ CRITICAL: Could not place SL for ${symbol} posId=${positionId}! ` +
+          `Close manually or set SL in MEXC UI immediately.`
+        );
+        return false;
+      }
+    }
+
+    // 2) N partial limit TP orders.
+    if (n === 1) {
+      const tpPrice = tpTargets[0];
+      await this.placeStopOrder(
+        {
+          symbol,
+          positionId,
+          vol,
+          profitTrend: 1,
+          takeProfitPrice: tpPrice,
+          takeProfitType: 1,
+          takeProfitOrderPrice: tpPrice,
+        },
+        "Deferred Limit TP"
+      );
+    } else {
+      // Multi-TP: split volume equally.
+      const perTarget = Math.floor(vol / n);
+      for (let i = 0; i < n; i++) {
+        const tpVol = i === n - 1 ? vol - perTarget * (n - 1) : perTarget;
+        if (tpVol <= 0) continue;
+        const tpPrice = tpTargets[i];
+        await this.placeStopOrder(
+          {
+            symbol,
+            positionId,
+            vol: tpVol,
+            profitTrend: 1,
+            takeProfitPrice: tpPrice,
+            takeProfitType: 1,
+            takeProfitOrderPrice: tpPrice,
+          },
+          `Deferred Limit TP${i + 1}`
+        );
+      }
+    }
+
+    this.logger.info(
+      `✅ Deferred limit TP/SL placed for ${symbol} posId=${positionId}`
+    );
+    return true;
   }
 
   /** Persist a trade record to the trades log file. */

@@ -226,7 +226,11 @@ export class PositionClosureMonitor {
     // missed history read still produces a notification.
     const src: Position = history ?? lastKnown;
 
-    const margin = src.oim || src.im || 0;
+    // MEXC position history often returns oim/im as 0 for closed positions.
+    // Fall back to the last-known open-position margin when history lacks it.
+    const historyMargin = src.oim || src.im || 0;
+    const fallbackMargin = lastKnown.oim || lastKnown.im || 0;
+    const margin = historyMargin > 0 ? historyMargin : fallbackMargin;
     const realisedPnl = Number.isFinite(src.realised) ? src.realised : 0;
 
     const info: ClosedPositionInfo = {

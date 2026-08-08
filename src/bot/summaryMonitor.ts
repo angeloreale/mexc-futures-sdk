@@ -119,6 +119,10 @@ export interface PositionAlert {
   target: "SL" | "TP";
   /** Fraction of the distance from entry toward the target already covered (0..1+) */
   progress: number;
+  /** Current unrealized PNL from MEXC (quote currency, e.g. USDT). */
+  pnl: number;
+  /** Independently computed PNL from (currentPrice − entry) × holdVol × contractSize. */
+  computedPnl: number;
 }
 
 /**
@@ -198,6 +202,13 @@ export interface PositionSummaryMonitorOptions {
    * Set to ORDER_RATE_INTERVAL_MS to guarantee each request is spaced.
    */
   requestSpacingMs?: number;
+
+  /**
+   * Called when a new position appears that wasn't previously tracked.
+   * Used to detect plan-order triggers so deferred limit TP/SL can be placed.
+   * Receives the new Position objects that just appeared.
+   */
+  onNewPosition?: (positions: Position[]) => void;
 }
 
 /**
@@ -222,6 +233,7 @@ export class PositionSummaryMonitor {
   private slTpRetentionMs: number;
   private onAlert: OnPositionAlert;
   private onSample: ((positions: Position[]) => void) | undefined;
+  private onNewPosition: ((positions: Position[]) => void) | undefined;
   private requestSpacingMs: number;
   /** Timestamp (ms) of the last API call made by emitSummary / fetchPendingOrders. */
   private lastSummaryApiCall = 0;
@@ -252,6 +264,7 @@ export class PositionSummaryMonitor {
     this.slTpStore = opts.slTpStore;
     this.onAlert = opts.onAlert;
     this.onSample = opts.onSample;
+    this.onNewPosition = opts.onNewPosition;
     this.requestSpacingMs = Math.max(0, opts.requestSpacingMs ?? 0);
     this.slTpRetentionMs = Math.max(opts.slTpRetentionDays, 1) * 86400_000;
     this.loadStats();
@@ -324,6 +337,12 @@ export class PositionSummaryMonitor {
       // don't need to make their own open-positions API call.
       this.onSample?.(active);
 
+      // Detect genuinely new positions (not present in the previous poll).
+      // Skip the very first poll (stats is empty) — all positions are "new"
+      // only because we haven't seeded yet.
+      const wasSeeded = this.stats.size > 0;
+      const newPositions: Position[] = [];
+
       for (const p of active) {
         const id = String(p.positionId);
         seen.add(id);
@@ -346,6 +365,10 @@ export class PositionSummaryMonitor {
             samples: [],
           };
           this.stats.set(id, st);
+          // Only report as "new" after the first poll has seeded stats.
+          if (wasSeeded) {
+            newPositions.push(p);
+          }
         } else {
           // Refresh metadata in case it changed (e.g. partial close adjusted it).
           st.symbol = p.symbol;
@@ -369,6 +392,15 @@ export class PositionSummaryMonitor {
 
       // Log ticker samples so a restart can restore them.
       this.logTickerEntries(active);
+
+      // Notify when genuinely new positions appear (plan-order triggers).
+      if (newPositions.length > 0 && this.onNewPosition) {
+        this.logger.info(
+          `🆕 ${newPositions.length} new position(s) detected: ` +
+          newPositions.map((p) => `${p.symbol} ${p.positionType === 1 ? "LONG" : "SHORT"}`).join(", ")
+        );
+        this.onNewPosition(newPositions);
+      }
 
       // Log per-position PNL ticker to console at every poll.
       for (const p of active) {
@@ -1272,6 +1304,34 @@ export class PositionSummaryMonitor {
 
     if (!target) return null;
 
+    const cs = this.contractSizes.get(p.symbol) ?? 1;
+    const vol = p.holdVol;
+    const mexcPnl = toFiniteNumber(p.unRealizedPnl);
+
+    // Compute PNL independently from the derived current price so the alert
+    // can show a cross-validated figure alongside MEXC's unRealizedPnl.
+    const computedPnl =
+      Number.isFinite(current) && Number.isFinite(avgEntry) && vol > 0
+        ? p.positionType === 1
+          ? (current - avgEntry) * vol * cs
+          : (avgEntry - current) * vol * cs
+        : NaN;
+
+    // Log if MEXC's unRealizedPnl differs from our independent computation.
+    // Large discrepancies indicate mark-price vs last-price gaps or stale data.
+    if (
+      Number.isFinite(mexcPnl) &&
+      Number.isFinite(computedPnl) &&
+      Math.abs(mexcPnl - computedPnl) > 0.01 &&
+      Math.abs(mexcPnl - computedPnl) / Math.max(Math.abs(mexcPnl), 0.01) > 0.05
+    ) {
+      this.logger.warn(
+        `⚠️ PNL mismatch for ${p.symbol}: MEXC unRealizedPnl=${mexcPnl.toFixed(4)} ` +
+        `vs computed=${computedPnl.toFixed(4)} (Δ=${(mexcPnl - computedPnl).toFixed(4)}) ` +
+        `· cs=${cs} vol=${vol}`
+      );
+    }
+
     return {
       positionId: String(p.positionId),
       symbol: p.symbol,
@@ -1283,6 +1343,8 @@ export class PositionSummaryMonitor {
       tp,
       target,
       progress: Math.min(progress, 9.99), // cap to avoid absurd values on extreme moves
+      pnl: Number.isFinite(mexcPnl) ? mexcPnl : 0,
+      computedPnl,
     };
   }
 

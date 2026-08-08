@@ -99,6 +99,11 @@ export function loadConfig(): BotConfig {
     10
   );
 
+  // Multi-TP splitting: when true, volume is split across TP targets.
+  // When false (default), only TP1 is used — single entry order, lower fees.
+  const splitMultiTp =
+    env.SPLIT_MULTI_TP === "true" || env.SPLIT_MULTI_TP === "1";
+
   const config: BotConfig = {
     mexcApiKey,
     mexcSecretKey,
@@ -128,6 +133,7 @@ export function loadConfig(): BotConfig {
     orderRateIntervalMs,
     signalResolverChannels,
     signalResolverIntervalSeconds,
+    splitMultiTp,
   };
 
   validate(config);
