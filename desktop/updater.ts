@@ -1,4 +1,5 @@
-import { autoUpdater } from "electron-updater";
+import { autoUpdater, AppUpdater as ElectronAppUpdater } from "electron-updater";
+import { shell } from "electron";
 import * as fs from "fs";
 import * as path from "path";
 import extract from "extract-zip";
@@ -59,6 +60,8 @@ export interface UpdateSnapshot {
   codeAssetUrl: string | null;
   /** Download progress 0–100 for either update type. */
   downloadPercent: number | null;
+  /** Direct download URL for the app installer (set when update-available fires). */
+  appDownloadUrl: string | null;
 }
 
 export interface RefreshDeps {
@@ -100,6 +103,7 @@ export class AppUpdater {
       latestCodeVersion: null,
       codeAssetUrl: null,
       downloadPercent: null,
+      appDownloadUrl: null,
     };
     this.configureAutoUpdater();
   }
@@ -151,6 +155,9 @@ export class AppUpdater {
     });
     autoUpdater.on("update-available", (info) => {
       this.snapshot.latestAppVersion = info.version;
+      // Capture the download URL so we can fetch manually (bypass sha512).
+      const files = (info as any).files as Array<{ url: string }> | undefined;
+      this.snapshot.appDownloadUrl = files?.[0]?.url ?? null;
       this.setState("app-available", `App update available: v${info.version}`);
     });
     autoUpdater.on("update-not-available", (info) => {
@@ -158,20 +165,6 @@ export class AppUpdater {
       this.setState(
         "app-current",
         `You are on the latest app version (v${this.snapshot.appVersion}).`
-      );
-    });
-    autoUpdater.on("download-progress", (p) => {
-      this.snapshot.downloadPercent = Math.round(p.percent * 10) / 10;
-      this.setState(
-        "downloading-app",
-        `Downloading app update… ${this.snapshot.downloadPercent}%`
-      );
-    });
-    autoUpdater.on("update-downloaded", (info) => {
-      this.snapshot.downloadPercent = 100;
-      this.setState(
-        "app-downloaded",
-        `App update v${info.version} downloaded. Click “Install & Restart”.`
       );
     });
     autoUpdater.on("error", (err) => {
@@ -190,19 +183,86 @@ export class AppUpdater {
     }
   }
 
-  /** Start downloading the available app update (non-blocking). */
-  downloadAppUpdate(): void {
-    autoUpdater
-      .downloadUpdate()
-      .catch((err) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.setState("error", `App download failed: ${msg}`);
+  /**
+   * Download the app installer manually (bypasses electron-updater's built-in
+   * sha512 verification which can mismatch when the latest.yml was regenerated
+   * without re-uploading all artifacts).
+   */
+  async downloadAppUpdate(): Promise<void> {
+    const url = this.snapshot.appDownloadUrl;
+    if (!url) {
+      this.setState("error", "No app download URL available — check for updates first.");
+      return;
+    }
+
+    this.setState("downloading-app", "Downloading app update…");
+    this.snapshot.downloadPercent = 0;
+
+    const tmpDir = path.join(this.runtimeCodeDir, ".app-update");
+    fs.mkdirSync(tmpDir, { recursive: true });
+    const installerPath = path.join(tmpDir, "installer.exe");
+
+    try {
+      const res = await fetch(url, {
+        headers: { "User-Agent": "Dupip-Invest-Connector" },
       });
+      if (!res.ok || !res.body) {
+        throw new Error(`Download failed (HTTP ${res.status})`);
+      }
+
+      const total = Number(res.headers.get("content-length") || 0);
+      let received = 0;
+      const reader = res.body.getReader();
+      const out = fs.createWriteStream(installerPath);
+
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          out.write(Buffer.from(value));
+          received += value.length;
+          if (total > 0) {
+            this.snapshot.downloadPercent = Math.min(100, Math.round((received / total) * 100));
+            this.setState(
+              "downloading-app",
+              `Downloading app update… ${this.snapshot.downloadPercent}%`
+            );
+          }
+        }
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        out.end(() => resolve());
+        out.on("error", reject);
+      });
+
+      this.snapshot.downloadPercent = 100;
+      this.setState(
+        "app-downloaded",
+        `App update v${this.snapshot.latestAppVersion ?? "?"} downloaded. Click “Install & Restart”.`
+      );
+    } catch (err) {
+      // Clean up partial download
+      try { fs.unlinkSync(installerPath); } catch { /* ok */ }
+      const msg = err instanceof Error ? err.message : String(err);
+      this.setState("error", `App download failed: ${msg}`);
+    }
   }
 
-  /** Quit and install the downloaded app update. */
+  /**
+   * Launch the downloaded installer. On Windows the .exe is an NSIS installer;
+   * the user follows the wizard. The running app will be replaced on next launch.
+   */
   installAppUpdate(): void {
-    autoUpdater.quitAndInstall(false, true);
+    const installerPath = path.join(this.runtimeCodeDir, ".app-update", "installer.exe");
+    if (!fs.existsSync(installerPath)) {
+      this.setState("error", "Installer not found — download it first.");
+      return;
+    }
+    shell.openPath(installerPath).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.setState("error", `Failed to launch installer: ${msg}`);
+    });
   }
 
   // ── Script code updates (GitHub dist.zip asset) ───

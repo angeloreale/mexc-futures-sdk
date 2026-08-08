@@ -253,8 +253,8 @@ function setupIPC(): void {
     return updater?.getInfo() ?? null;
   });
 
-  ipcMain.handle("download-app-update", () => {
-    updater?.downloadAppUpdate();
+  ipcMain.handle("download-app-update", async () => {
+    await updater?.downloadAppUpdate();
     return updater?.getInfo() ?? null;
   });
 
