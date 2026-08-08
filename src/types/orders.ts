@@ -149,6 +149,8 @@ export interface SubmitStopOrderRequest {
   takeProfitType?: 0 | 1;
   /** Limit order price used when takeProfitType=1. */
   takeProfitOrderPrice?: number;
+  /** TP/SL quantity type: "SAME" (shared vol, default) or "SEPARATE" (takeProfitVol/stopLossVol). */
+  profitLossVolType?: "SAME" | "SEPARATE";
   /** Conditional-order trigger protection: 0 disabled (default), 1 enabled. */
   priceProtect?: 0 | 1;
 }

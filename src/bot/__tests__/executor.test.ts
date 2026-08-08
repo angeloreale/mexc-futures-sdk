@@ -89,7 +89,7 @@ describe("TradeExecutor limit (maker) TP/SL mode", () => {
     };
   });
 
-  it("submits a market entry WITHOUT attached TP/SL and places limit TP + SL via stoporder/place", async () => {
+  it("submits a market entry WITHOUT attached TP/SL and places combined limit TP+SL via one stoporder/place call", async () => {
     client.submitOrder.mockResolvedValue({ success: true, code: 0, data: "order-1" });
     client.getOrder.mockResolvedValue({
       success: true,
@@ -106,23 +106,21 @@ describe("TradeExecutor limit (maker) TP/SL mode", () => {
     expect(orderParams.stopLossPrice).toBeUndefined();
     expect(orderParams.takeProfitPrice).toBeUndefined();
 
-    // Limit SL placed first, then Limit TP — both against the resolved positionId.
-    expect(client.submitStopOrder).toHaveBeenCalledTimes(2);
-    const [slReq, tpReq] = client.submitStopOrder.mock.calls.map((c: any[]) => c[0]);
-    expect(slReq).toMatchObject({
+    // Single combined call carries both limit SL + limit TP against the resolved
+    // positionId (profitLossVolType=SAME). takeProfitPrice is NOT sent for a limit TP.
+    expect(client.submitStopOrder).toHaveBeenCalledTimes(1);
+    const [req] = client.submitStopOrder.mock.calls.map((c: any[]) => c[0]);
+    expect(req).toMatchObject({
       positionId: 111,
       vol: 1,
       stopLossType: 1,
       stopLossOrderPrice: 65000,
       stopLossPrice: 65000,
-    });
-    expect(tpReq).toMatchObject({
-      positionId: 111,
-      vol: 1,
       takeProfitType: 1,
       takeProfitOrderPrice: 68000,
-      takeProfitPrice: 68000,
+      profitLossVolType: "SAME",
     });
+    expect(req.takeProfitPrice).toBeUndefined();
 
     expect(records[0].success).toBe(true);
   });
@@ -148,7 +146,9 @@ describe("TradeExecutor limit (maker) TP/SL mode", () => {
       data: { positionId: 222 },
     });
     client.submitStopOrder
-      // Limit SL → rejected, Market SL fallback → ok, Limit TP → rejected, Market TP fallback → ok
+      // Combined TP/SL → rejected, Limit SL → rejected, Market SL fallback → ok,
+      // Limit TP → rejected, Limit TP retry → ok (no market TP needed)
+      .mockResolvedValueOnce({ success: false, code: 999, message: "combined rejected" })
       .mockResolvedValueOnce({ success: false, code: 999, message: "limit rejected" })
       .mockResolvedValueOnce({ success: true, code: 0, data: "stop-sl" })
       .mockResolvedValueOnce({ success: false, code: 999, message: "limit rejected" })
@@ -157,12 +157,17 @@ describe("TradeExecutor limit (maker) TP/SL mode", () => {
     const executor = new TradeExecutor(client, makeConfig({ useLimitTpSl: true }), logger);
     await executor.execute(makeTrade());
 
-    expect(client.submitStopOrder).toHaveBeenCalledTimes(4);
+    expect(client.submitStopOrder).toHaveBeenCalledTimes(5);
     const reqs = client.submitStopOrder.mock.calls.map((c: any[]) => c[0]);
-    // Limit SL → market SL fallback → Limit TP → market TP fallback.
-    expect(reqs[0]).toMatchObject({ stopLossType: 1 });
-    expect(reqs[1].stopLossType).toBeUndefined();
-    expect(reqs[2]).toMatchObject({ takeProfitType: 1 });
-    expect(reqs[3].takeProfitType).toBeUndefined();
+    // Combined TP/SL → Limit SL → Market SL fallback → Limit TP → Limit TP (retry, ok).
+    expect(reqs[0]).toMatchObject({ stopLossType: 1, takeProfitType: 1 });
+    expect(reqs[0].takeProfitPrice).toBeUndefined();
+    expect(reqs[1]).toMatchObject({ stopLossType: 1 });
+    expect(reqs[1].takeProfitType).toBeUndefined();
+    expect(reqs[2].stopLossType).toBeUndefined();
+    expect(reqs[3]).toMatchObject({ takeProfitType: 1 });
+    expect(reqs[3].takeProfitPrice).toBeUndefined();
+    expect(reqs[4]).toMatchObject({ takeProfitType: 1 });
+    expect(reqs[4].takeProfitPrice).toBeUndefined();
   });
 });

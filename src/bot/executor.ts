@@ -508,8 +508,12 @@ export class TradeExecutor {
       return;
     }
 
-    // 1) Stop-loss FIRST (protect the downside), then take-profit.
-    const slPlaced = await this.placeStopOrder(
+    // Place TP and SL together in ONE /stoporder/place call
+    // (profitLossVolType=SAME → the same vol covers both), which halves the
+    // number of API calls vs the old SL-then-TP approach. If the combined order
+    // is rejected, fall back to placing SL and TP separately (limit first, then
+    // market) so the position is never left unprotected.
+    const combined = await this.placeStopOrder(
       {
         symbol: trade.mexcSymbol,
         positionId,
@@ -518,46 +522,66 @@ export class TradeExecutor {
         stopLossPrice: trade.stopLossPrice,
         stopLossType: 1,
         stopLossOrderPrice: trade.stopLossPrice,
+        profitTrend: 1,
+        takeProfitType: 1,
+        takeProfitOrderPrice: takeProfitPrice,
+        profitLossVolType: "SAME",
       },
-      "Limit SL"
+      "Limit TP/SL"
     );
-    if (!slPlaced) {
-      await this.placeStopOrder(
+    if (!combined) {
+      // Fallback 1: stop-loss (limit → market).
+      const slPlaced = await this.placeStopOrder(
         {
           symbol: trade.mexcSymbol,
           positionId,
           vol: volume,
           lossTrend: 1,
           stopLossPrice: trade.stopLossPrice,
+          stopLossType: 1,
+          stopLossOrderPrice: trade.stopLossPrice,
         },
-        "Market SL (fallback)"
+        "Limit SL"
       );
-    }
+      if (!slPlaced) {
+        await this.placeStopOrder(
+          {
+            symbol: trade.mexcSymbol,
+            positionId,
+            vol: volume,
+            lossTrend: 1,
+            stopLossPrice: trade.stopLossPrice,
+          },
+          "Market SL (fallback)"
+        );
+      }
 
-    // 2) Take-profit as a limit (maker) order.
-    const tpPlaced = await this.placeStopOrder(
-      {
-        symbol: trade.mexcSymbol,
-        positionId,
-        vol: volume,
-        profitTrend: 1,
-        takeProfitPrice,
-        takeProfitType: 1,
-        takeProfitOrderPrice: takeProfitPrice,
-      },
-      "Limit TP"
-    );
-    if (!tpPlaced) {
-      await this.placeStopOrder(
+      // Fallback 2: take-profit as a limit (maker) order — note a limit TP only
+      // sends takeProfitOrderPrice, NEVER takeProfitPrice (MEXC rejects both).
+      const tpPlaced = await this.placeStopOrder(
         {
           symbol: trade.mexcSymbol,
           positionId,
           vol: volume,
           profitTrend: 1,
-          takeProfitPrice,
+          takeProfitType: 1,
+          takeProfitOrderPrice: takeProfitPrice,
         },
-        "Market TP (fallback)"
+        "Limit TP",
+        1
       );
+      if (!tpPlaced) {
+        await this.placeStopOrder(
+          {
+            symbol: trade.mexcSymbol,
+            positionId,
+            vol: volume,
+            profitTrend: 1,
+            takeProfitPrice,
+          },
+          "Market TP (fallback)"
+        );
+      }
     }
   }
 
@@ -615,25 +639,33 @@ export class TradeExecutor {
    */
   private async placeStopOrder(
     params: SubmitStopOrderRequest,
-    label: string
+    label: string,
+    retries: number = 0
   ): Promise<boolean> {
-    try {
-      const response = await this.client.submitStopOrder(params);
-      if (response.success) {
-        this.logger.info(
-          `✅ ${label} placed for ${params.symbol}: ${String(response.data ?? "")}`
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      if (attempt > 0) {
+        this.logger.warn(
+          `🔁 ${label} attempt ${attempt + 1}/${retries + 1} for ${params.symbol} — retrying`
         );
-        return true;
+        await new Promise((r) => setTimeout(r, 600 * attempt));
       }
-      this.logger.error(
-        `❌ ${label} rejected for ${params.symbol}: ${response.message || `Code ${response.code}`}`
-      );
-      return false;
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      this.logger.error(`❌ ${label} failed for ${params.symbol}: ${msg}`);
-      return false;
+      try {
+        const response = await this.client.submitStopOrder(params);
+        if (response.success) {
+          this.logger.info(
+            `✅ ${label} placed for ${params.symbol}: ${String(response.data ?? "")}`
+          );
+          return true;
+        }
+        this.logger.error(
+          `❌ ${label} rejected for ${params.symbol}: ${response.message || `Code ${response.code}`}`
+        );
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        this.logger.error(`❌ ${label} failed for ${params.symbol}: ${msg}`);
+      }
     }
+    return false;
   }
 
   /** Convert a successful/failed API response to a TradeRecord. */
@@ -844,11 +876,11 @@ export class TradeExecutor {
           positionId,
           vol: tpVol,
           profitTrend: 1,
-          takeProfitPrice: tpPrice,
           takeProfitType: 1,
           takeProfitOrderPrice: tpPrice,
         },
-        `Limit TP${i + 1}`
+        `Limit TP${i + 1}`,
+        1
       );
       if (!tpPlaced) {
         await this.placeStopOrder(
@@ -886,56 +918,109 @@ export class TradeExecutor {
       `${n} TP(s), SL=${sl}, vol=${vol}`
     );
 
-    // 1) SL FIRST — non-negotiable safety net.
-    const slPlaced = await this.placeStopOrder(
-      {
-        symbol,
-        positionId,
-        vol,
-        lossTrend: 1,
-        stopLossPrice: sl,
-        stopLossType: 1,
-        stopLossOrderPrice: sl,
-      },
-      "Deferred Limit SL"
-    );
-    if (!slPlaced) {
-      // Market SL fallback — any SL is better than none.
-      const mktSl = await this.placeStopOrder(
+    // Single TP: place SL + TP together in ONE /stoporder/place call
+    // (profitLossVolType=SAME → the same vol covers both). If the combined order
+    // is rejected, fall back to SL first (limit → market), then TP (limit → market).
+    if (n === 1) {
+      const tpPrice = tpTargets[0];
+      const combined = await this.placeStopOrder(
         {
           symbol,
           positionId,
           vol,
           lossTrend: 1,
           stopLossPrice: sl,
+          stopLossType: 1,
+          stopLossOrderPrice: sl,
+          profitTrend: 1,
+          takeProfitType: 1,
+          takeProfitOrderPrice: tpPrice,
+          profitLossVolType: "SAME",
         },
-        "Deferred Market SL (fallback)"
+        "Deferred Limit TP/SL"
       );
-      if (!mktSl) {
-        this.logger.error(
-          `❌ CRITICAL: Could not place SL for ${symbol} posId=${positionId}! ` +
-          `Close manually or set SL in MEXC UI immediately.`
+      if (!combined) {
+        const slPlaced = await this.placeStopOrder(
+          {
+            symbol,
+            positionId,
+            vol,
+            lossTrend: 1,
+            stopLossPrice: sl,
+            stopLossType: 1,
+            stopLossOrderPrice: sl,
+          },
+          "Deferred Limit SL"
         );
-        return false;
+        if (!slPlaced) {
+          // Market SL fallback — any SL is better than none.
+          const mktSl = await this.placeStopOrder(
+            {
+              symbol,
+              positionId,
+              vol,
+              lossTrend: 1,
+              stopLossPrice: sl,
+            },
+            "Deferred Market SL (fallback)"
+          );
+          if (!mktSl) {
+            this.logger.error(
+              `❌ CRITICAL: Could not place SL for ${symbol} posId=${positionId}! ` +
+              `Close manually or set SL in MEXC UI immediately.`
+            );
+            return false;
+          }
+        }
+        // A limit TP only sends takeProfitOrderPrice — NEVER takeProfitPrice
+        // (MEXC rejects both). Retried so a transient failure still attaches it.
+        await this.placeStopOrder(
+          {
+            symbol,
+            positionId,
+            vol,
+            profitTrend: 1,
+            takeProfitType: 1,
+            takeProfitOrderPrice: tpPrice,
+          },
+          "Deferred Limit TP",
+          1
+        );
       }
-    }
-
-    // 2) N partial limit TP orders with weighted distribution.
-    if (n === 1) {
-      const tpPrice = tpTargets[0];
-      await this.placeStopOrder(
+    } else {
+      // Multi-TP: SL FIRST — non-negotiable safety net.
+      const slPlaced = await this.placeStopOrder(
         {
           symbol,
           positionId,
           vol,
-          profitTrend: 1,
-          takeProfitPrice: tpPrice,
-          takeProfitType: 1,
-          takeProfitOrderPrice: tpPrice,
+          lossTrend: 1,
+          stopLossPrice: sl,
+          stopLossType: 1,
+          stopLossOrderPrice: sl,
         },
-        "Deferred Limit TP"
+        "Deferred Limit SL"
       );
-    } else {
+      if (!slPlaced) {
+        // Market SL fallback — any SL is better than none.
+        const mktSl = await this.placeStopOrder(
+          {
+            symbol,
+            positionId,
+            vol,
+            lossTrend: 1,
+            stopLossPrice: sl,
+          },
+          "Deferred Market SL (fallback)"
+        );
+        if (!mktSl) {
+          this.logger.error(
+            `❌ CRITICAL: Could not place SL for ${symbol} posId=${positionId}! ` +
+            `Close manually or set SL in MEXC UI immediately.`
+          );
+          return false;
+        }
+      }
       // Use the configured distribution (Fibonacci default).
       // volScale/volUnit are not available from PendingPlanTpSl details,
       // so we use a safe default (0 decimals, unit=1) — the contract
@@ -959,11 +1044,11 @@ export class TradeExecutor {
             positionId,
             vol: tpVol,
             profitTrend: 1,
-            takeProfitPrice: tpPrice,
             takeProfitType: 1,
             takeProfitOrderPrice: tpPrice,
           },
-          `Deferred Limit TP${i + 1}`
+          `Deferred Limit TP${i + 1}`,
+          1
         );
       }
     }

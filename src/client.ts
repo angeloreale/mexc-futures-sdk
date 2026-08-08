@@ -544,9 +544,25 @@ export class MexcFuturesSDK {
       if (p.profitTrend !== undefined && ![1, 2, 3].includes(p.profitTrend)) {
         throw new MexcValidationError("profitTrend must be 1 (latest), 2 (fair), or 3 (index)", "profitTrend");
       }
-      // At least one of TP/SL must be requested — this endpoint is meaningless otherwise.
-      if (p.stopLossPrice === undefined && p.takeProfitPrice === undefined) {
-        throw new MexcValidationError("at least one of stopLossPrice or takeProfitPrice is required", "stoporder");
+      // At least one of TP/SL must be requested — this endpoint is meaningless
+      // otherwise. A LIMIT TP/SL is expressed via *_orderPrice (with *_type=1),
+      // so accept the order price as satisfying the take-profit side too.
+      const hasTp = p.takeProfitPrice !== undefined || p.takeProfitOrderPrice !== undefined;
+      const hasSl = p.stopLossPrice !== undefined || p.stopLossOrderPrice !== undefined;
+      if (!hasSl && !hasTp) {
+        throw new MexcValidationError(
+          "at least one of stop-loss or take-profit (price or order price) is required",
+          "stoporder"
+        );
+      }
+      // MEXC rejects requests that set both the market trigger price and the limit
+      // order price for the same side. For a LIMIT TP (takeProfitType=1) only
+      // takeProfitOrderPrice may be sent — never takeProfitPrice too.
+      if (p.takeProfitPrice !== undefined && p.takeProfitOrderPrice !== undefined) {
+        throw new MexcValidationError(
+          "takeProfitPrice and takeProfitOrderPrice cannot be set at the same time (use takeProfitOrderPrice for a limit TP)",
+          "takeProfitOrderPrice"
+        );
       }
 
       this.logger.info("🎯 Placing stop-limit (TP/SL) order using /stoporder/place endpoint");
