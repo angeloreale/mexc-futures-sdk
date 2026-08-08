@@ -29,14 +29,14 @@ mac:
     - dmg
     - zip
   icon: desktop/renderer/icon.png
-  artifactName: ${productName}-${version}-mac.${ext}
+  artifactName: ${productName}-${version}-mac-${arch}.${ext}
 
 win:
   target:
     - nsis
     - portable
   icon: desktop/renderer/icon.png
-  artifactName: ${productName}-${version}-win.${ext}
+  artifactName: ${productName}-${version}-win-${arch}.${ext}
   defaultArch: x64
 
 linux:
@@ -45,7 +45,7 @@ linux:
     - deb
   category: Finance
   icon: desktop/renderer/icon.png
-  artifactName: ${productName}-${version}-linux.${ext}
+  artifactName: ${productName}-${version}-linux-${arch}.${ext}
 
 nsis:
   oneClick: false
