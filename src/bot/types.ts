@@ -69,6 +69,10 @@ export interface ResolvedTrade {
   currentPrice: number;
   /** Contract size from MEXC (e.g. 0.0001 for BTC_USDT — 1 contract = 0.0001 BTC) */
   contractSize: number;
+  /** Taker fee rate for this contract (e.g. 0.0006 = 0.06%). Populated when known. */
+  takerFeeRate?: number;
+  /** Maker fee rate for this contract (e.g. 0.0002 = 0.02%). Populated when known. */
+  makerFeeRate?: number;
 }
 
 /**

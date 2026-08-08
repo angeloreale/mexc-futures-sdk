@@ -27,6 +27,7 @@ import { formatPositionAlertMessage } from "./alertMessage";
 import { formatPositionCloseMessage, PositionCloseResult } from "./closeMessage";
 import { formatCancelOrdersMessage, CancelOrdersResult } from "./cancelMessage";
 import { formatReverseMessage, ReverseResult, formatAddToMessage, AddToResult } from "./reverseAddMessage";
+import { formatTradeConfirmationMessage } from "./confirmationMessage";
 import { SlTpStore } from "./slTpStore";
 import { Position } from "../types/account";
 import { GetOrderResponse, PlanOrderListResponse } from "../types/orders";
@@ -1297,6 +1298,40 @@ export class SignalBot {
   }
 
   /**
+   * Send a pre-trade confirmation to the allowed channel the signal came from.
+   * Shows the expected TP/SL and estimated realized PNL (including fees) before
+   * any order is submitted to MEXC. Skips non-allowed channels.
+   */
+  private async sendTradeConfirmation(
+    t: ResolvedTrade,
+    chatId?: number | string
+  ): Promise<void> {
+    if (chatId === undefined || chatId === null) return;
+    const channel = String(chatId);
+    if (!this.isAllowedChannel(channel)) {
+      this.logger.debug(
+        `🧾 Skipping trade confirmation to non-allowed channel ${channel}`
+      );
+      return;
+    }
+    const text = formatTradeConfirmationMessage(t, this.config.baseCurrency, {
+      useLimitTpSl: this.config.useLimitTpSl,
+      dryRun: this.config.dryRun,
+    });
+    try {
+      await this.telegram.telegram.sendMessage(channel, text, {
+        parse_mode: "HTML",
+      });
+      this.logger.info(`🧾 Trade confirmation sent to ${channel}`);
+    } catch (error) {
+      this.logger.error(
+        "❌ Failed to send trade confirmation:",
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+
+  /**
    * Send an order-placed notification to the summary channel.
    */
   private async sendOrderPlacedNotification(record: TradeRecord): Promise<void> {
@@ -1618,6 +1653,11 @@ export class SignalBot {
     this.logger.info(
       `📐 Sized: ${resolvedTrade.volume} contracts, ${resolvedTrade.side === 1 ? "LONG" : "SHORT"}, leverage ${resolvedTrade.leverage}x`
     );
+
+    // 5.5. Send a trade confirmation to the originating allowed channel BEFORE
+    // placing any order — shows the expected TP/SL and estimated realized PNL
+    // (including fees) so the channel can verify the plan before it executes.
+    await this.sendTradeConfirmation(resolvedTrade, signal.chatId);
 
     // 6. Execute
     const records = await this.executor.execute(resolvedTrade);

@@ -160,5 +160,7 @@ export function calculatePositionSize(
     volUnit: contract.volUnit || 1,
     currentPrice,
     contractSize: contract.contractSize || 1,
+    takerFeeRate: contract.takerFeeRate,
+    makerFeeRate: contract.makerFeeRate,
   };
 }
