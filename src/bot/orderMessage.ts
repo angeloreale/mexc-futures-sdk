@@ -17,9 +17,17 @@ function fmt(n: number, digits = 2): string {
  * take-profit target, before fees. Positive for both LONG and SHORT.
  *
  * Accounts for contractSize: profit = volume × contractSize × |tp − entry|
+ *
+ * @param preciseEntry Optional precise (unrounded) entry price.
  */
-function estimateTpProfit(t: ResolvedTrade, volume: number, tp: number): number {
-  const diff = t.side === 1 ? tp - t.entry : t.entry - tp;
+function estimateTpProfit(
+  t: ResolvedTrade,
+  volume: number,
+  tp: number,
+  preciseEntry?: number
+): number {
+  const entry = preciseEntry ?? t.entry;
+  const diff = t.side === 1 ? tp - entry : entry - tp;
   return volume * (t.contractSize || 1) * diff;
 }
 
@@ -32,12 +40,14 @@ function estimateTpProfit(t: ResolvedTrade, volume: number, tp: number): number 
 function estimateTpProfitPercent(
   t: ResolvedTrade,
   volume: number,
-  tp: number
+  tp: number,
+  preciseEntry?: number
 ): number {
   const cs = t.contractSize || 1;
-  const margin = (volume * cs * t.entry) / t.leverage;
+  const entry = preciseEntry ?? t.entry;
+  const margin = (volume * cs * entry) / t.leverage;
   if (margin <= 0) return NaN;
-  return (estimateTpProfit(t, volume, tp) / margin) * 100;
+  return (estimateTpProfit(t, volume, tp, preciseEntry) / margin) * 100;
 }
 
 /**
@@ -62,12 +72,17 @@ export function formatOrderPlacedMessage(
   const dir = t.side === 1 ? "LONG" : "SHORT";
   const marginMode = t.openType === 1 ? "Isolated" : "Cross";
   const isTrigger = t.signal.orderType === "trigger";
+
+  // Use precise (unrounded) values from the signal for display.
+  const preciseEntry = t.signal.entry;
+  const preciseSl = t.signal.sl;
+
   const typeLabel = isTrigger
-    ? `🔔 Pending trigger @ ${fmtPrice(t.entry)}`
-    : `💹 Market entry @ ${fmtPrice(t.entry)}`;
+    ? `🔔 Pending trigger @ ${fmtPrice(preciseEntry)}`
+    : `💹 Market entry @ ${fmtPrice(preciseEntry)}`;
   const useLimitTpSl = opts?.useLimitTpSl === true && !isTrigger;
-  const tpProfit = estimateTpProfit(t, orderVolume, orderTp);
-  const tpProfitPct = estimateTpProfitPercent(t, orderVolume, orderTp);
+  const tpProfit = estimateTpProfit(t, orderVolume, orderTp, preciseEntry);
+  const tpProfitPct = estimateTpProfitPercent(t, orderVolume, orderTp, preciseEntry);
   const orderRisk = t.volume > 0 ? t.riskAmount * (orderVolume / t.volume) : 0;
 
   const lines = [
@@ -75,8 +90,8 @@ export function formatOrderPlacedMessage(
     ``,
     `🪙 <b>${t.mexcSymbol}</b> · ${dir} · ${t.leverage}x · ${marginMode}`,
     typeLabel,
-    `SL: ${fmtPrice(t.stopLossPrice)} · TP: ${fmtPrice(orderTp)}${useLimitTpSl ? ` 🛡️ Limit TP/SL` : ""}`,
-    `Vol: ${fmt(orderVolume)} · Notional: ~${fmt(orderVolume * (t.contractSize || 1) * t.entry)} ${currency}`,
+    `SL: ${fmtPrice(preciseSl)} · TP: ${fmtPrice(orderTp)}${useLimitTpSl ? ` 🛡️ Limit TP/SL` : ""}`,
+    `Vol: ${fmt(orderVolume)} · Notional: ~${fmt(orderVolume * (t.contractSize || 1) * preciseEntry)} ${currency}`,
     `Risk: ${fmt(orderRisk)} ${currency} (${(t.riskPercent * 100).toFixed(1)}%)`,
     `Est. profit @ TP ${fmtPrice(orderTp)}: ~${fmt(tpProfit)} ${currency} (${fmt(tpProfitPct, 1)}%)`,
     ``,

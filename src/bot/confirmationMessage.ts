@@ -39,9 +39,19 @@ function fmtBase(n: number): string {
  * take-profit target, before fees. Positive for both LONG and SHORT.
  *
  * Accounts for contractSize: profit = volume × contractSize × |tp − entry|
+ *
+ * @param preciseEntry Optional precise (unrounded) entry price from the signal.
+ *   When provided, uses this instead of the exchange-rounded t.entry for more
+ *   accurate estimates.
  */
-function estimateTpProfit(t: ResolvedTrade, volume: number, tp: number): number {
-  const diff = t.side === 1 ? tp - t.entry : t.entry - tp;
+function estimateTpProfit(
+  t: ResolvedTrade,
+  volume: number,
+  tp: number,
+  preciseEntry?: number
+): number {
+  const entry = preciseEntry ?? t.entry;
+  const diff = t.side === 1 ? tp - entry : entry - tp;
   return volume * (t.contractSize || 1) * diff;
 }
 
@@ -50,9 +60,19 @@ function estimateTpProfit(t: ResolvedTrade, volume: number, tp: number): number 
  * expressed as a positive magnitude (before fees).
  *
  * loss = volume × contractSize × |entry − sl|
+ *
+ * @param preciseEntry Optional precise (unrounded) entry price from the signal.
+ * @param preciseSl   Optional precise (unrounded) stop-loss from the signal.
  */
-function estimateSlLoss(t: ResolvedTrade, volume: number): number {
-  return volume * (t.contractSize || 1) * Math.abs(t.entry - t.stopLossPrice);
+function estimateSlLoss(
+  t: ResolvedTrade,
+  volume: number,
+  preciseEntry?: number,
+  preciseSl?: number
+): number {
+  const entry = preciseEntry ?? t.entry;
+  const sl = preciseSl ?? t.stopLossPrice;
+  return volume * (t.contractSize || 1) * Math.abs(entry - sl);
 }
 
 /**
@@ -67,7 +87,8 @@ function estimateFees(
   t: ResolvedTrade,
   volume: number,
   exitPrice: number,
-  opts?: { useLimitTpSl?: boolean }
+  opts?: { useLimitTpSl?: boolean },
+  preciseEntry?: number
 ): { entryFee: number; exitFee: number; total: number } | null {
   const taker = t.takerFeeRate;
   const maker = t.makerFeeRate;
@@ -79,7 +100,8 @@ function estimateFees(
   const exitRate =
     opts?.useLimitTpSl === true && isMarketEntry ? maker : taker;
 
-  const entryFee = volume * cs * t.entry * entryRate;
+  const entryPrice = preciseEntry ?? t.entry;
+  const entryFee = volume * cs * entryPrice * entryRate;
   const exitFee = volume * cs * exitPrice * exitRate;
   return { entryFee, exitFee, total: entryFee + exitFee };
 }
@@ -87,14 +109,18 @@ function estimateFees(
 /**
  * Estimated realized PNL (net of fees) as a percentage of the initial margin,
  * mirroring the PNL monitor's pnlPercent = realisedPnl / margin * 100.
+ *
+ * @param preciseEntry Optional precise (unrounded) entry price.
  */
 function estimatePnlPercent(
   t: ResolvedTrade,
   volume: number,
-  netPnl: number
+  netPnl: number,
+  preciseEntry?: number
 ): number {
   const cs = t.contractSize || 1;
-  const margin = (volume * cs * t.entry) / t.leverage;
+  const entry = preciseEntry ?? t.entry;
+  const margin = (volume * cs * entry) / t.leverage;
   if (margin <= 0) return NaN;
   return (netPnl / margin) * 100;
 }
@@ -140,36 +166,51 @@ export function formatTradeConfirmationMessage(
   const dir = t.side === 1 ? "LONG" : "SHORT";
   const marginMode = t.openType === 1 ? "Isolated" : "Cross";
   const isTrigger = t.signal.orderType === "trigger";
+
+  // Use precise (unrounded) values from the signal for display and PNL
+  // estimates.  The sizer rounds prices to the exchange's priceScale for
+  // order submission, but the confirmation should show the values the user
+  // entered (or the exact ticker price for market entries).
+  const preciseEntry = t.signal.entry;
+  const preciseSl = t.signal.sl;
+
   const typeLabel = isTrigger
-    ? `🔔 Trigger entry @ ${fmtPrice(t.entry)}`
-    : `💹 Market entry @ ${fmtPrice(t.entry)}`;
+    ? `🔔 Trigger entry @ ${fmtPrice(preciseEntry)}`
+    : `💹 Market entry @ ${fmtPrice(preciseEntry)}`;
   const cs = t.contractSize || 1;
   const volume = t.volume;
 
-  // Expected TP / SL figures. An order may carry 2+ TP targets — show each one.
-  const tps = t.allTpTargets.length > 0 ? t.allTpTargets : [t.takeProfitPrice];
-  const sl = t.stopLossPrice;
-  const grossSlLoss = estimateSlLoss(t, volume);
+  // Expected TP / SL figures.  Use the signal's original TP values for
+  // full precision; fall back to the sizer's (possibly default) TP when
+  // the signal carried none.
+  const tps =
+    t.signal.tp.length > 0
+      ? t.signal.tp
+      : t.allTpTargets.length > 0
+        ? t.allTpTargets
+        : [t.takeProfitPrice];
+
+  const grossSlLoss = estimateSlLoss(t, volume, preciseEntry, preciseSl);
 
   // Net-of-fee realized PNL at the SL (null when fee rates are unknown).
-  const slFees = estimateFees(t, volume, sl, opts);
+  const slFees = estimateFees(t, volume, preciseSl, opts, preciseEntry);
   const netSlPnl = slFees ? -grossSlLoss - slFees.total : null;
 
   const slPnlLine = netSlPnl !== null
-    ? `Est. net loss: <b>${fmtSigned(netSlPnl)}</b> ${currency} (${fmt(estimatePnlPercent(t, volume, netSlPnl), 1)}%) · incl. fees`
-    : `Est. loss: ~${fmtSigned(-grossSlLoss)} ${currency} (${fmt(estimatePnlPercent(t, volume, -grossSlLoss), 1)}%) · before fees`;
+    ? `Est. net loss: <b>${fmtSigned(netSlPnl)}</b> ${currency} (${fmt(estimatePnlPercent(t, volume, netSlPnl, preciseEntry), 1)}%) · incl. fees`
+    : `Est. loss: ~${fmtSigned(-grossSlLoss)} ${currency} (${fmt(estimatePnlPercent(t, volume, -grossSlLoss, preciseEntry), 1)}%) · before fees`;
 
   // One header + PNL line per TP target.
   const tpBlock: string[] = [];
   let tpFees: { total: number; entryFee: number; exitFee: number } | null = null;
   for (let i = 0; i < tps.length; i++) {
     const tp = tps[i];
-    const gross = estimateTpProfit(t, volume, tp);
-    const fees = estimateFees(t, volume, tp, opts);
+    const gross = estimateTpProfit(t, volume, tp, preciseEntry);
+    const fees = estimateFees(t, volume, tp, opts, preciseEntry);
     if (i === 0) tpFees = fees;
     const pnlLine = fees
-      ? `   Est. net profit: <b>${fmtSigned(gross - fees.total)}</b> ${currency} (${fmt(estimatePnlPercent(t, volume, gross - fees.total), 1)}%) · incl. fees`
-      : `   Est. profit: ~${fmt(gross)} ${currency} (${fmt(estimatePnlPercent(t, volume, gross), 1)}%) · before fees`;
+      ? `   Est. net profit: <b>${fmtSigned(gross - fees.total)}</b> ${currency} (${fmt(estimatePnlPercent(t, volume, gross - fees.total, preciseEntry), 1)}%) · incl. fees`
+      : `   Est. profit: ~${fmt(gross)} ${currency} (${fmt(estimatePnlPercent(t, volume, gross, preciseEntry), 1)}%) · before fees`;
     const header = tps.length > 1
       ? `📍 TP${i + 1}: <b>${fmtPrice(tp)}</b>`
       : `📍 Expected TP: <b>${fmtPrice(tp)}</b>`;
@@ -177,7 +218,7 @@ export function formatTradeConfirmationMessage(
   }
 
   const risk = t.riskAmount;
-  const notional = volume * cs * t.entry;
+  const notional = volume * cs * preciseEntry;
 
   // Fee breakdown line (when known) — uses the first TP's exit leg.
   const feesLine =
@@ -254,7 +295,7 @@ export function formatTradeConfirmationMessage(
     typeLabel,
     ``,
     ...tpBlock,
-    `📉 Expected SL: <b>${fmtPrice(sl)}</b>`,
+    `📉 Expected SL: <b>${fmtPrice(preciseSl)}</b>`,
     `   ${slPnlLine}`,
     ``,
     `💵 Risk: ${fmt(risk)} ${currency} (${(t.riskPercent * 100).toFixed(1)}%) · Notional: ~${fmt(notional)} ${currency}`,
