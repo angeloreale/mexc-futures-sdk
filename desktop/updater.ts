@@ -200,7 +200,13 @@ export class AppUpdater {
 
     const tmpDir = path.join(this.runtimeCodeDir, ".app-update");
     fs.mkdirSync(tmpDir, { recursive: true });
-    const installerPath = path.join(tmpDir, "installer.exe");
+
+    // Derive the file extension from the URL so we support .exe, .dmg, .AppImage.
+    const urlPath = new URL(url).pathname;
+    const ext = path.extname(urlPath) || ".exe";
+    // Remove query params that may be appended to the filename in the URL.
+    const cleanExt = ext.split("?")[0];
+    const installerPath = path.join(tmpDir, `installer${cleanExt}`);
 
     try {
       const res = await fetch(url, {
@@ -250,15 +256,22 @@ export class AppUpdater {
   }
 
   /**
-   * Launch the downloaded installer. On Windows the .exe is an NSIS installer;
-   * the user follows the wizard. The running app will be replaced on next launch.
+   * Launch the downloaded installer. Uses shell.openPath which handles
+   * .exe (NSIS on Windows), .dmg (macOS), and .AppImage (Linux).
    */
   installAppUpdate(): void {
-    const installerPath = path.join(this.runtimeCodeDir, ".app-update", "installer.exe");
-    if (!fs.existsSync(installerPath)) {
+    const tmpDir = path.join(this.runtimeCodeDir, ".app-update");
+    if (!fs.existsSync(tmpDir)) {
       this.setState("error", "Installer not found — download it first.");
       return;
     }
+    // Find the installer file (any extension).
+    const files = fs.readdirSync(tmpDir).filter((f) => f.startsWith("installer"));
+    if (files.length === 0) {
+      this.setState("error", "Installer not found — download it first.");
+      return;
+    }
+    const installerPath = path.join(tmpDir, files[0]);
     shell.openPath(installerPath).catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
       this.setState("error", `Failed to launch installer: ${msg}`);
