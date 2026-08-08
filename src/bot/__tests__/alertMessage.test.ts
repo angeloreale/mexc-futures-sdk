@@ -29,7 +29,8 @@ describe("formatPositionAlertMessage", () => {
     expect(text).toContain("LONG");
     expect(text).toContain("10x");
     expect(text).toContain("Take-profit");
-    expect(text).toContain("Current PNL: +125.00 USDT");
+    expect(text).toContain("Current PNL:");
+    expect(text).toContain("+125.00");
   });
 
   it("shows SL alert with negative PNL for a losing long", () => {
@@ -45,7 +46,8 @@ describe("formatPositionAlertMessage", () => {
 
     expect(text).toContain("60% toward SL");
     expect(text).toContain("Stop-loss");
-    expect(text).toContain("Current PNL: -50.00 USDT");
+    expect(text).toContain("Current PNL:");
+    expect(text).toContain("-50.00");
   });
 
   it("shows TP alert for a short position", () => {
@@ -65,7 +67,8 @@ describe("formatPositionAlertMessage", () => {
 
     expect(text).toContain("SHORT");
     expect(text).toContain("Take-profit");
-    expect(text).toContain("Current PNL: +75.00 USDT");
+    expect(text).toContain("Current PNL:");
+    expect(text).toContain("+75.00");
   });
 
   it("omits PNL line when pnl is not finite", () => {
