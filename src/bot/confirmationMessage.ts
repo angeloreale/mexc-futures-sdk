@@ -23,6 +23,18 @@ function fmtSigned(n: number, digits = 2): string {
 }
 
 /**
+ * Format a base-currency amount (volume × contractSize) for the hedge-net
+ * line, e.g. "1" or "0.6". Trims trailing zeros; non-finite → "—".
+ */
+function fmtBase(n: number): string {
+  if (!Number.isFinite(n)) return "—";
+  return n.toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 6,
+  });
+}
+
+/**
  * Estimated gross profit (in quote currency) if price reaches the given
  * take-profit target, before fees. Positive for both LONG and SHORT.
  *
@@ -95,12 +107,31 @@ function estimatePnlPercent(
  *
  * @param t        The fully resolved trade (post-sizing, pre-execution)
  * @param currency Quote currency (e.g. "USDT")
- * @param opts     Display options (limit/maker TP/SL active, dry-run marker, pending queue size)
+ * @param opts     Display options (limit/maker TP/SL active, dry-run marker, pending queue)
  */
+export interface QueuedOrderLine {
+  /** Operator-facing queue ID (e.g. "Q1") */
+  id: string;
+  /** MEXC symbol (e.g. "ETH_USDT") */
+  symbol: string;
+  /** "LONG" or "SHORT" */
+  sideLabel: string;
+  /** Entry price for the queued order */
+  entry: number;
+  /** Order volume in contracts */
+  volume: number;
+  /** Contract size (base units per contract) */
+  contractSize?: number;
+}
+
 export function formatTradeConfirmationMessage(
   t: ResolvedTrade,
   currency: string,
-  opts?: { useLimitTpSl?: boolean; dryRun?: boolean; pendingCount?: number }
+  opts?: {
+    useLimitTpSl?: boolean;
+    dryRun?: boolean;
+    queue?: QueuedOrderLine[];
+  }
 ): string {
   const dir = t.side === 1 ? "LONG" : "SHORT";
   const marginMode = t.openType === 1 ? "Isolated" : "Cross";
@@ -111,30 +142,40 @@ export function formatTradeConfirmationMessage(
   const cs = t.contractSize || 1;
   const volume = t.volume;
 
-  // Expected TP / SL figures.
-  const tp = t.takeProfitPrice;
+  // Expected TP / SL figures. An order may carry 2+ TP targets — show each one.
+  const tps = t.allTpTargets.length > 0 ? t.allTpTargets : [t.takeProfitPrice];
   const sl = t.stopLossPrice;
-  const grossTpProfit = estimateTpProfit(t, volume, tp);
   const grossSlLoss = estimateSlLoss(t, volume);
 
-  // Net-of-fee realized PNL at each level (null when fee rates are unknown).
-  const tpFees = estimateFees(t, volume, tp, opts);
+  // Net-of-fee realized PNL at the SL (null when fee rates are unknown).
   const slFees = estimateFees(t, volume, sl, opts);
-  const netTpPnl = tpFees ? grossTpProfit - tpFees.total : null;
   const netSlPnl = slFees ? -grossSlLoss - slFees.total : null;
-
-  const tpPnlLine = netTpPnl !== null
-    ? `Est. net profit: <b>${fmtSigned(netTpPnl)}</b> ${currency} (${fmt(estimatePnlPercent(t, volume, netTpPnl), 1)}%) · incl. fees`
-    : `Est. profit: ~${fmt(grossTpProfit)} ${currency} (${fmt(estimatePnlPercent(t, volume, grossTpProfit), 1)}%) · before fees`;
 
   const slPnlLine = netSlPnl !== null
     ? `Est. net loss: <b>${fmtSigned(netSlPnl)}</b> ${currency} (${fmt(estimatePnlPercent(t, volume, netSlPnl), 1)}%) · incl. fees`
     : `Est. loss: ~${fmtSigned(-grossSlLoss)} ${currency} (${fmt(estimatePnlPercent(t, volume, -grossSlLoss), 1)}%) · before fees`;
 
+  // One header + PNL line per TP target.
+  const tpBlock: string[] = [];
+  let tpFees: { total: number; entryFee: number; exitFee: number } | null = null;
+  for (let i = 0; i < tps.length; i++) {
+    const tp = tps[i];
+    const gross = estimateTpProfit(t, volume, tp);
+    const fees = estimateFees(t, volume, tp, opts);
+    if (i === 0) tpFees = fees;
+    const pnlLine = fees
+      ? `   Est. net profit: <b>${fmtSigned(gross - fees.total)}</b> ${currency} (${fmt(estimatePnlPercent(t, volume, gross - fees.total), 1)}%) · incl. fees`
+      : `   Est. profit: ~${fmt(gross)} ${currency} (${fmt(estimatePnlPercent(t, volume, gross), 1)}%) · before fees`;
+    const header = tps.length > 1
+      ? `📍 TP${i + 1}: <b>${fmtPrice(tp)}</b>`
+      : `📍 Expected TP: <b>${fmtPrice(tp)}</b>`;
+    tpBlock.push(header, pnlLine);
+  }
+
   const risk = t.riskAmount;
   const notional = volume * cs * t.entry;
 
-  // Fee breakdown line (when known).
+  // Fee breakdown line (when known) — uses the first TP's exit leg.
   const feesLine =
     tpFees && slFees
       ? `🧾 Est. fees: ${fmt(tpFees.total)} ${currency} (${fmt(tpFees.entryFee)} entry + ${fmt(tpFees.exitFee)} exit)`
@@ -142,11 +183,49 @@ export function formatTradeConfirmationMessage(
 
   const dryRunTag = opts?.dryRun ? ` · 🧪 DRY RUN` : "";
 
-  // Queue status (when the pending queue size is known).
-  const queueLine =
-    opts?.pendingCount !== undefined
-      ? `📋 Queue: ${opts.pendingCount} order(s) pending — send CONFIRM ORDERS to place`
-      : null;
+  // Queue listing (with per-order IDs for CANCEL {ID}).
+  let queueLine: string | null = null;
+  if (opts?.queue && opts.queue.length > 0) {
+    const rows = opts.queue
+      .map(
+        (q) =>
+          `  <code>${q.id}</code> · ${q.symbol} ${q.sideLabel} · @ ${fmtPrice(q.entry)}`
+      )
+      .join("\n");
+
+    // Hedge net: when the same symbol is queued in BOTH directions, show the
+    // net exposure (volume × contractSize, in base units) for that symbol.
+    const hedgeLines: string[] = [];
+    const bySymbol = new Map<string, QueuedOrderLine[]>();
+    for (const q of opts.queue) {
+      const arr = bySymbol.get(q.symbol) ?? [];
+      arr.push(q);
+      bySymbol.set(q.symbol, arr);
+    }
+    for (const [symbol, entries] of bySymbol) {
+      const longs = entries.filter((e) => e.sideLabel === "LONG");
+      const shorts = entries.filter((e) => e.sideLabel === "SHORT");
+      if (longs.length === 0 || shorts.length === 0) continue;
+      const cs = entries[0].contractSize ?? 1;
+      const base = symbol.includes("_") ? symbol.split("_")[0] : "";
+      const unit = base ? ` ${base}` : "";
+      const longBase = longs.reduce((s, e) => s + e.volume * cs, 0);
+      const shortBase = shorts.reduce((s, e) => s + e.volume * cs, 0);
+      const net = longBase - shortBase;
+      const netLabel =
+        Math.abs(net) < 1e-12
+          ? "<b>fully hedged</b>"
+          : `<b>${net > 0 ? "LONG" : "SHORT"} ${fmtBase(Math.abs(net))}${unit}</b>`;
+      hedgeLines.push(
+        `🧮 <b>Hedge net:</b> ${symbol} · LONG ${fmtBase(longBase)}${unit} − SHORT ${fmtBase(shortBase)}${unit} → ${netLabel}`
+      );
+    }
+
+    queueLine =
+      `📋 <b>Queue (${opts.queue.length})</b>:\n${rows}` +
+      (hedgeLines.length > 0 ? `\n${hedgeLines.join("\n")}` : "") +
+      `\n   Send <code>CONFIRM ORDERS</code> to place all · <code>CANCEL {ID}</code> to remove one`;
+  }
 
   const lines = [
     `🧾 <b>TRADE CONFIRMATION</b>${dryRunTag}`,
@@ -154,8 +233,7 @@ export function formatTradeConfirmationMessage(
     `🪙 <b>${t.mexcSymbol}</b> · ${dir} · ${t.leverage}x · ${marginMode}`,
     typeLabel,
     ``,
-    `📍 Expected TP: <b>${fmtPrice(tp)}</b>`,
-    `   ${tpPnlLine}`,
+    ...tpBlock,
     `📉 Expected SL: <b>${fmtPrice(sl)}</b>`,
     `   ${slPnlLine}`,
     ``,

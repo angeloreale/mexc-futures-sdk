@@ -175,6 +175,20 @@ describe("parseSignal", () => {
     expect(result!.tp).toEqual([467.72]);
   });
 
+  it("parses a bare entry price (no @/EP) as a trigger entry", () => {
+    const result = parseSignal(
+      "BUY ETHUSDT 1920.18 SL 1911.92 TP1 1920.44 TP2 1920.58 R0.5"
+    );
+    expect(result).not.toBeNull();
+    expect(result!.action).toBe("BUY");
+    expect(result!.rawSymbol).toBe("ETHUSDT");
+    expect(result!.entry).toBe(1920.18);
+    expect(result!.sl).toBe(1911.92);
+    expect(result!.tp).toEqual([1920.44, 1920.58]);
+    expect(result!.orderType).toBe("trigger");
+    expect(result!.riskPercentOverride).toBe(0.5);
+  });
+
   // --- Trigger order: TPs below entry for BUY should be accepted ---
   // The entry is a trigger price, not a guaranteed fill. User explicitly chose targets.
   it("accepts trigger BUY with TPs below entry price", () => {

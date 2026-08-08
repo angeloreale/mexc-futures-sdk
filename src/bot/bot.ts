@@ -2,7 +2,7 @@ import { Telegraf, Context } from "telegraf";
 import { message, channelPost } from "telegraf/filters";
 import { MexcFuturesSDK } from "../client";
 import { Logger } from "../utils/logger";
-import { BotConfig, TradeSignal, TradeRecord, SignalResolutionEvent } from "./types";
+import { BotConfig, TradeSignal, TradeRecord, SignalResolutionEvent, QueuedOrder } from "./types";
 import { parseSignals, normalizeSymbol } from "./parser";
 import { ContractResolver } from "./resolver";
 import { calculatePositionSize } from "./sizer";
@@ -68,7 +68,9 @@ export class SignalBot {
   private equityCache: { equity: number; ts: number } | null = null;
   private readonly EQUITY_CACHE_TTL_MS = 10_000;
   /** Orders sized but NOT yet placed — submitted only on operator CONFIRM ORDERS. */
-  private orderQueue: ResolvedTrade[] = [];
+  private orderQueue: QueuedOrder[] = [];
+  /** Monotonic counter generating operator-facing queue IDs (Q1, Q2, ...). */
+  private queueCounter = 0;
   /** Signal resolver: monitors resolver-channel signals for TP/SL hits (null when disabled). */
   private signalResolver: SignalResolver | null = null;
   /**
@@ -1420,7 +1422,8 @@ export class SignalBot {
       `🧾 CONFIRM ORDERS: placing ${pending.length} queued order(s)`
     );
 
-    for (const trade of pending) {
+    for (const queued of pending) {
+      const trade = queued.trade;
       const records = await this.executor.execute(trade);
       for (const record of records) {
         if (record.success) {
@@ -1468,6 +1471,58 @@ export class SignalBot {
   }
 
   /**
+   * Remove a single order from the pending queue by its queue ID (e.g. "Q2").
+   *
+   * "CANCEL Q2" — removes only that queued order, leaving the rest pending.
+   */
+  private async handleCancelQueuedOrder(
+    id: string,
+    chatId: string,
+    messageId: number
+  ): Promise<void> {
+    if (this.state.isProcessed(chatId, messageId)) {
+      this.logger.debug(`⏭️ CANCEL ${id} already processed`);
+      return;
+    }
+    this.state.markProcessed(chatId, messageId);
+
+    const normalized = id.toUpperCase();
+    const index = this.orderQueue.findIndex(
+      (q) => q.id.toUpperCase() === normalized
+    );
+    if (index === -1) {
+      this.logger.warn(`🗑️ CANCEL ${id}: no queued order with that ID`);
+      const current =
+        this.orderQueue.length > 0
+          ? `Current queue: ${this.orderQueue.map((q) => q.id).join(", ")}.`
+          : "Queue is empty.";
+      await this.sendToChannel(
+        chatId,
+        `🗑️ <b>CANCEL ${id}</b>\n\nNo queued order with ID <code>${id}</code>. ${current}`,
+        "Queue-cancel notice"
+      );
+      return;
+    }
+
+    const [removed] = this.orderQueue.splice(index, 1);
+    const sideLabel = removed.trade.side === 1 ? "LONG" : "SHORT";
+    const remaining =
+      this.orderQueue.length > 0
+        ? `\nRemaining: ${this.orderQueue
+            .map((q) => `${q.id} · ${q.trade.mexcSymbol}`)
+            .join(", ")}.`
+        : "";
+    this.logger.info(
+      `🗑️ CANCEL ${id}: removed ${removed.trade.mexcSymbol} ${sideLabel} — ${this.orderQueue.length} order(s) remaining`
+    );
+    await this.sendToChannel(
+      chatId,
+      `🗑️ <b>CANCEL ${id}</b>\n\nRemoved ${removed.trade.mexcSymbol} ${sideLabel} from the queue. ${this.orderQueue.length} order(s) remaining.${remaining}`,
+      "Queue-cancel notice"
+    );
+  }
+
+  /**
    * Send a short text message to a specific Telegram channel (HTML parse mode).
    */
   private async sendToChannel(
@@ -1499,6 +1554,7 @@ export class SignalBot {
   ): Promise<void> {
     if (chatId === undefined || chatId === null) return;
     const channel = String(chatId);
+    // Only send confirmations back to an allowed trading channel.
     if (!this.isAllowedChannel(channel)) {
       this.logger.debug(
         `🧾 Skipping trade confirmation to non-allowed channel ${channel}`
@@ -1508,7 +1564,14 @@ export class SignalBot {
     const text = formatTradeConfirmationMessage(t, this.config.baseCurrency, {
       useLimitTpSl: this.config.useLimitTpSl,
       dryRun: this.config.dryRun,
-      pendingCount: this.orderQueue.length,
+      queue: this.orderQueue.map((q) => ({
+        id: q.id,
+        symbol: q.trade.mexcSymbol,
+        sideLabel: q.trade.side === 1 ? "LONG" : "SHORT",
+        entry: q.trade.entry,
+        volume: q.trade.volume,
+        contractSize: q.trade.contractSize,
+      })),
     });
     try {
       await this.telegram.telegram.sendMessage(channel, text, {
@@ -1594,6 +1657,18 @@ export class SignalBot {
     }
     if (/^cancel\s+orders?\s*$/i.test(text.trim())) {
       await this.handleCancelQueue(chatId, messageId);
+      return;
+    }
+
+    // Cancel a single queued order by its queue ID: "CANCEL Q2" — removes
+    // only that order from the pending queue, leaving the rest intact.
+    const cancelQueuedMatch = /^cancel\s+(Q\d+)\s*$/i.exec(text.trim());
+    if (cancelQueuedMatch) {
+      await this.handleCancelQueuedOrder(
+        cancelQueuedMatch[1],
+        chatId,
+        messageId
+      );
       return;
     }
 
@@ -1862,9 +1937,13 @@ export class SignalBot {
     // confirms with "CONFIRM ORDERS". Sending the confirmation message here
     // lets the channel verify expected TP/SL (including fees) before any
     // order is actually placed.
-    this.orderQueue.push(resolvedTrade);
+    const queued: QueuedOrder = {
+      id: `Q${++this.queueCounter}`,
+      trade: resolvedTrade,
+    };
+    this.orderQueue.push(queued);
     this.logger.info(
-      `🧾 Queued ${resolvedTrade.mexcSymbol} ${resolvedTrade.side === 1 ? "LONG" : "SHORT"} — ${this.orderQueue.length} order(s) pending, awaiting CONFIRM ORDERS`
+      `🧾 Queued ${queued.id} ${resolvedTrade.mexcSymbol} ${resolvedTrade.side === 1 ? "LONG" : "SHORT"} — ${this.orderQueue.length} order(s) pending, awaiting CONFIRM ORDERS`
     );
     await this.sendTradeConfirmation(resolvedTrade, signal.chatId);
   }

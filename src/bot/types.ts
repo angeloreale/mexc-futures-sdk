@@ -76,6 +76,18 @@ export interface ResolvedTrade {
 }
 
 /**
+ * A trade queued for operator confirmation before submission to MEXC.
+ * Each queued order carries an operator-facing ID (e.g. "Q1") so it can be
+ * selectively removed with "CANCEL {ID}" without affecting the rest of the queue.
+ */
+export interface QueuedOrder {
+  /** Operator-facing queue ID (e.g. "Q1", "Q2") used with CANCEL {ID} */
+  id: string;
+  /** Fully-resolved trade awaiting CONFIRM ORDERS */
+  trade: ResolvedTrade;
+}
+
+/**
  * Record of an executed trade for traceability.
  */
 export interface TradeRecord {

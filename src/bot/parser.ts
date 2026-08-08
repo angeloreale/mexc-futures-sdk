@@ -6,12 +6,20 @@ import { TradeSignal } from "./types";
  *   BUY ZECUSDT EP 460 SL 459.41 TP1 467.72
  *   SELL BTCUSDT@65000 SL 66000 TP1 64000 TP2 63000 TP3 62000
  *   BUY ETHUSDT@3500 SL 3400
- *   BUY ZECUSDT SL 459.41 TP1 467.72 TP2 468.80 TP3 471.42  (market — no @/EP)
+ *   BUY ETHUSDT 1920.18 SL 1911.92 TP1 1920.44 TP2 1920.58  (bare entry price — no @/EP)
+ *   BUY ZECUSDT SL 459.41 TP1 467.72 TP2 468.80 TP3 471.42  (market — no entry price)
  *   BUY BNBUSDT@571.22 SL 569.68 TP1 571.49 TP2 572.21 R2 L50  (risk + leverage override)
  *
  * SIGNAL_REGEX captures (with @price or EP price):
  *   1: action (BUY|SELL)
  *   2: symbol (e.g. TAOUSDT, USDJPY)
+ *   3: entry price
+ *   4: SL price
+ *   5: rest of line for TP + risk extraction
+ *
+ * SIGNAL_REGEX_BARE_PRICE captures (entry price with no @/EP prefix):
+ *   1: action (BUY|SELL)
+ *   2: symbol
  *   3: entry price
  *   4: SL price
  *   5: rest of line for TP + risk extraction
@@ -24,6 +32,9 @@ import { TradeSignal } from "./types";
  */
 const SIGNAL_REGEX =
   /\b(BUY|SELL)\s+([A-Z][A-Z0-9]{2,19})@(\d+(?:\.\d+)?)\s+SL\s+(\d+(?:\.\d+)?)(.*)/i;
+
+const SIGNAL_REGEX_BARE_PRICE =
+  /\b(BUY|SELL)\s+([A-Z][A-Z0-9]{2,19})\s+(\d+(?:\.\d+)?)\s+SL\s+(\d+(?:\.\d+)?)(.*)/i;
 
 const SIGNAL_REGEX_MARKET =
   /\b(BUY|SELL)\s+([A-Z][A-Z0-9]{2,19})\s+SL\s+(\d+(?:\.\d+)?)(.*)/i;
@@ -77,7 +88,12 @@ export function parseSignal(
   let isMarketEntry = false;
 
   if (!match) {
-    // Try market-entry regex (no @/EP)
+    // Try bare-price entry regex (no @/EP), e.g. "BUY ETHUSDT 1920.18 SL 1911.92"
+    match = cleaned.match(SIGNAL_REGEX_BARE_PRICE);
+  }
+
+  if (!match) {
+    // Try market-entry regex (no entry price)
     match = cleaned.match(SIGNAL_REGEX_MARKET);
     isMarketEntry = true;
   }
