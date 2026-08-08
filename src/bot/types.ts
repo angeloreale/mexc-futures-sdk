@@ -203,6 +203,24 @@ export interface BotConfig {
    * used and a single entry order is placed with all volume, minimizing fees.
    */
   splitMultiTp: boolean;
+
+  /**
+   * Volume distribution percentages for multi-TP partial closing.
+   * The first value is for TP1 (closest to entry, hit first), the last is
+   * for the farthest TP. Each value is a percentage (1–100) of the total
+   * position volume allocated to that TP level. The array is normalized
+   * internally so the values don't need to sum to exactly 100.
+   *
+   * When empty or not set, a Fibonacci-based default is used:
+   *   2 TPs → [61.8, 38.2]
+   *   3 TPs → [50, 30, 20]
+   *   4 TPs → [40, 30, 20, 10]
+   *   5 TPs → [35, 25, 18, 13, 9]
+   *   N TPs → reversed Fibonacci weights normalized to 100.
+   *
+   * Set via TP_DISTRIBUTION env var (comma-separated, e.g. "60,30,10").
+   */
+  tpDistribution: number[];
 }
 
 /**

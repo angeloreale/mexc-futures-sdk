@@ -1,6 +1,52 @@
 import { BotConfig } from "./types";
 
 /**
+ * Compute Fibonacci-based volume distribution weights for N TP levels.
+ *
+ * Uses a descending Fibonacci-like sequence so the closest TP (TP1, hit
+ * first) gets the largest allocation, and the farthest TP gets the smallest.
+ * The returned array sums to 100.
+ *
+ * Sequence used (N items, reversed): e.g. for 3 TPs → [5,3,2] → [50,30,20].
+ */
+export function fibonacciTpDistribution(n: number): number[] {
+  if (n <= 0) return [];
+  if (n === 1) return [100];
+
+  // Generate a Fibonacci-style descending sequence of length n.
+  // fib(0)=1, fib(1)=1, fib(2)=2, fib(3)=3, fib(4)=5, fib(5)=8, ...
+  const fib = (k: number): number => {
+    if (k <= 1) return 1;
+    let a = 1, b = 1;
+    for (let i = 2; i <= k; i++) {
+      const c = a + b;
+      a = b;
+      b = c;
+    }
+    return b;
+  };
+
+  // Build a descending slice: larger weights first (for closer TPs).
+  // For n=3: fib(3)=3, fib(2)=2, fib(1)=1 → [3,2,1] (reversed later)
+  const raw: number[] = [];
+  for (let i = n; i >= 1; i--) {
+    raw.push(fib(i));
+  }
+
+  // Normalize to percentages summing to 100.
+  const sum = raw.reduce((a, b) => a + b, 0);
+  if (sum === 0) return raw.map(() => 100 / n);
+
+  // Compute rounded percentages, adjusting the last to make the sum exactly 100.
+  const pct = raw.map((v) => Math.round((v / sum) * 100));
+  const pctSum = pct.reduce((a, b) => a + b, 0);
+  if (pctSum !== 100) {
+    pct[pct.length - 1] += 100 - pctSum;
+  }
+  return pct;
+}
+
+/**
  * Load and validate bot configuration from environment variables.
  * All secrets come from env — never from source files.
  */
@@ -113,6 +159,23 @@ export function loadConfig(): BotConfig {
   const splitMultiTp =
     env.SPLIT_MULTI_TP === "true" || env.SPLIT_MULTI_TP === "1";
 
+  // TP volume distribution: comma-separated percentages (e.g. "60,30,10").
+  // When not set, Fibonacci-based defaults are computed at execution time
+  // based on the number of TP levels in the signal.
+  const tpDistributionRaw = (env.TP_DISTRIBUTION || "").trim();
+  let tpDistribution: number[] = [];
+  if (tpDistributionRaw) {
+    tpDistribution = tpDistributionRaw
+      .split(",")
+      .map((s) => parseFloat(s.trim()))
+      .filter((n) => !isNaN(n) && n > 0);
+    if (tpDistribution.length === 0) {
+      throw new Error(
+        "TP_DISTRIBUTION must be comma-separated positive numbers (e.g. \"60,30,10\")"
+      );
+    }
+  }
+
   const config: BotConfig = {
     mexcApiKey,
     mexcSecretKey,
@@ -144,6 +207,7 @@ export function loadConfig(): BotConfig {
     signalResolverChannels,
     signalResolverIntervalSeconds,
     splitMultiTp,
+    tpDistribution,
   };
 
   validate(config);

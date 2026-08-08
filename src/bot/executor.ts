@@ -4,6 +4,7 @@ import { SubmitOrderRequest, SubmitOrderResponse, SubmitPlanOrderRequest, Submit
 import { Position } from "../types/account";
 import { BotConfig, ResolvedTrade, TradeRecord } from "./types";
 import { Logger } from "../utils/logger";
+import { fibonacciTpDistribution } from "./config";
 
 /**
  * Details of a plan (trigger) order that was placed WITHOUT attached TP/SL.
@@ -688,13 +689,79 @@ export class TradeExecutor {
   }
 
   /**
+   * Compute per-TP volumes based on the configured distribution.
+   *
+   * When `config.tpDistribution` is set (e.g. [60,30,10]), it's used directly
+   * after normalization. When empty, Fibonacci-based defaults are computed
+   * for the given number of TP targets.
+   *
+   * The distribution array maps: dist[0] → TP1 (closest, largest share),
+   * dist[last] → farthest TP (smallest share).
+   *
+   * @returns Array of volumes, one per TP target (same order as targets).
+   */
+  private computeTpVolumes(
+    totalVol: number,
+    n: number,
+    volScale: number,
+    volUnit: number,
+  ): number[] {
+    // Get the distribution percentages, normalized to sum to 100.
+    let dist: number[];
+    if (this.config.tpDistribution.length > 0) {
+      // Use user-configured distribution, pad/truncate to n items.
+      dist = this.config.tpDistribution.slice(0, n);
+      while (dist.length < n) {
+        // Pad with the last value repeated.
+        dist.push(dist[dist.length - 1] || 1);
+      }
+    } else {
+      // Fibonacci default.
+      dist = fibonacciTpDistribution(n);
+    }
+
+    // Normalize to sum to 1.
+    const sum = dist.reduce((a, b) => a + b, 0);
+    const norm = dist.map((d) => (sum > 0 ? d / sum : 1 / n));
+
+    // Round helper respecting contract precision.
+    const roundVol = (v: number): number => {
+      const stepped = Math.floor(v / volUnit) * volUnit;
+      if (volScale > 0) {
+        const factor = Math.pow(10, volScale);
+        return Math.floor(stepped * factor) / factor;
+      }
+      return stepped;
+    };
+
+    // Compute raw volumes.
+    const rawVols = norm.map((frac) => frac * totalVol);
+
+    // Round each, then adjust the last to account for rounding remainder.
+    const vols = rawVols.map(roundVol);
+    const placed = vols.reduce((a, b) => a + b, 0);
+    const remainder = roundVol(totalVol - placed);
+    if (remainder > 0 && vols.length > 0) {
+      vols[vols.length - 1] += remainder;
+    }
+
+    // Ensure no zero volumes — give at least volUnit.
+    for (let i = 0; i < vols.length; i++) {
+      if (vols[i] <= 0) vols[i] = volUnit;
+    }
+
+    return vols;
+  }
+
+  /**
    * Place N partial limit (maker) TP orders + 1 limit SL for a position that
    * just opened from a single market entry order. Used by multi-TP splitting
    * to avoid N separate entry orders (and their taker fees).
    *
-   * Volume is split equally across the TP targets. The SL covers the full
-   * position volume. All orders use the limit (maker) order type for reduced
-   * fees; if a limit placement fails, falls back to market.
+   * Volume is split according to the configured TP distribution
+   * (Fibonacci-based by default, or user-configured via TP_DISTRIBUTION).
+   * The SL covers the full position volume. All orders use the limit (maker)
+   * order type for reduced fees; if a limit placement fails, falls back to market.
    */
   private async attachMultiLimitTps(
     trade: ResolvedTrade,
@@ -712,21 +779,10 @@ export class TradeExecutor {
 
     const targets = trade.allTpTargets;
     const n = targets.length;
-    const { volUnit } = trade;
+    const { volScale, volUnit } = trade;
 
-    // Split volume equally, respecting contract precision.
-    const roundVol = (v: number): number => {
-      const stepped = Math.floor(v / volUnit) * volUnit;
-      if (trade.volScale > 0) {
-        const factor = Math.pow(10, trade.volScale);
-        return Math.floor(stepped * factor) / factor;
-      }
-      return stepped;
-    };
-
-    const rawPerTarget = trade.volume / n;
-    let volPerTarget = roundVol(rawPerTarget);
-    if (volPerTarget <= 0) volPerTarget = volUnit;
+    // Compute per-TP volumes using the configured distribution (Fibonacci default).
+    const tpVolumes = this.computeTpVolumes(trade.volume, n, volScale, volUnit);
 
     // 1) SL FIRST (always, for the full volume).
     this.logger.info(
@@ -757,17 +813,18 @@ export class TradeExecutor {
       );
     }
 
-    // 2) N partial limit TP orders, one per target.
-    // Last TP gets any rounding remainder.
-    let placed = 0;
+    // 2) N partial limit TP orders, one per target with weighted volumes.
+    // The distribution is already computed in tpVolumes.
+    const distLabel = this.config.tpDistribution.length > 0
+      ? "user" : "Fibonacci";
+    this.logger.info(
+      `📊 Multi-TP ${trade.mexcSymbol}: ${n} TPs with ${distLabel} distribution: ` +
+      tpVolumes.map((v, i) => `TP${i + 1}=${v}`).join(", ")
+    );
+
     for (let i = 0; i < n; i++) {
-      // Last target gets the remaining volume.
-      const isLast = i === n - 1;
-      const tpVol = isLast
-        ? roundVol(trade.volume - placed)
-        : volPerTarget;
+      const tpVol = tpVolumes[i];
       if (tpVol <= 0) continue;
-      placed += tpVol;
 
       const tpPrice = targets[i];
       this.logger.info(
@@ -857,7 +914,7 @@ export class TradeExecutor {
       }
     }
 
-    // 2) N partial limit TP orders.
+    // 2) N partial limit TP orders with weighted distribution.
     if (n === 1) {
       const tpPrice = tpTargets[0];
       await this.placeStopOrder(
@@ -873,10 +930,21 @@ export class TradeExecutor {
         "Deferred Limit TP"
       );
     } else {
-      // Multi-TP: split volume equally.
-      const perTarget = Math.floor(vol / n);
+      // Use the configured distribution (Fibonacci default).
+      // volScale/volUnit are not available from PendingPlanTpSl details,
+      // so we use a safe default (0 decimals, unit=1) — the contract
+      // will reject if precision is wrong, but the original plan order
+      // already validated the total volume.
+      const tpVolumes = this.computeTpVolumes(vol, n, 0, 1);
+      const distLabel = this.config.tpDistribution.length > 0
+        ? "user" : "Fibonacci";
+      this.logger.info(
+        `📊 Deferred multi-TP ${symbol}: ${n} TPs with ${distLabel} distribution: ` +
+        tpVolumes.map((v, i) => `TP${i + 1}=${v}`).join(", ")
+      );
+
       for (let i = 0; i < n; i++) {
-        const tpVol = i === n - 1 ? vol - perTarget * (n - 1) : perTarget;
+        const tpVol = tpVolumes[i];
         if (tpVol <= 0) continue;
         const tpPrice = tpTargets[i];
         await this.placeStopOrder(

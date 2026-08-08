@@ -36,6 +36,7 @@ function makeConfig(overrides?: Partial<BotConfig>): BotConfig {
     signalResolverIntervalSeconds: 15,
     splitMultiTp: false,
     confirmChannels: [],
+    tpDistribution: [],
     ...overrides,
   };
 }

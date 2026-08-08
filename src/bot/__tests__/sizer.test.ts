@@ -36,6 +36,7 @@ const defaultConfig: BotConfig = {
   signalResolverIntervalSeconds: 15,
   splitMultiTp: false,
   confirmChannels: [],
+  tpDistribution: [],
 };
 
 function makeContract(overrides?: Partial<ContractDetail>): ContractDetail {
